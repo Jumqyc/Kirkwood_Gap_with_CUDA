@@ -25,3 +25,5 @@ target_compile_options(kirkwood PRIVATE
   -march=native
   -Wall
   -Wextra)
+  find_package(OpenMP REQUIRED)
+  target_link_libraries(kirkwood PRIVATE OpenMP::OpenMP_CXX)

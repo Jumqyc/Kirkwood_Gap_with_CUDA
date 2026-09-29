@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <omp.h>
 
 #include "vec3.hpp"
 
@@ -11,10 +12,16 @@ constexpr double M_Sun = 1;
 constexpr double M_Jupiter = 0.000954500308024994;
 constexpr double M_Saturn = 0.00028564603527829116;
 
-constexpr double dt = 1; // in days
+constexpr double dt = 10; // in days
 
 constexpr double G = 0.00029592190063820864 * dt * dt;
 // G in units of AU^3 / (Msun * dt^2)
+
+constexpr std::int32_t separation = 1024;
+
+// A test particle is removed once it comes inside this radius, in AU. 1.524 is
+// Mars's semimajor axis, so reaching it means the orbit is Mars-crossing.
+constexpr double REMOVE_BELOW_AU = 1.524;
 
 // A massive body, in the heliocentric frame with the Sun pinned at the origin.
 // Note: v and a are per *step*, not per day -- dt is folded into G above, so a
@@ -39,15 +46,15 @@ class Simulation{
     const std::vector<Planet>& get_planets() const {return this->planets;}
 
     double time();
-
-    
-    void forward();
+    void run();
 
     private:
     Particles particles;
     std::vector<Planet> planets;
-    std::uint64_t step;
-    std::uint32_t n_particles;
+    std::uint64_t step;      // steps taken so far
+    std::uint64_t tot_step;    // total steps to take
     void plant_acc();
     void particle_acc();
+    void forward();
+    void cull();
 };

@@ -11,6 +11,7 @@ struct Vec3
     double x,y,z;
 
     // Adds alpha * other into this, in place. No temporary, no allocation.
+    
     void add_scaled(double alpha, const Vec3 &other){
         x += alpha * other.x;
         y += alpha * other.y;
@@ -25,16 +26,19 @@ struct SoAVec3 {
 
     explicit SoAVec3(std::size_t n = 0) : x(n), y(n), z(n) {}
 
-    // Adds alpha * other into this, element-wise, in place. No temporary.
-    // Args:
-    //   alpha: scalar factor.
-    //   other: same length as this, i.e. other.x.size() == x.size().
     void add_scaled(double alpha, const SoAVec3 &other){
+        #pragma omp parallel for simd
         for (std::size_t i = 0; i < x.size(); ++i){
             x[i] += alpha * other.x[i];
             y[i] += alpha * other.y[i];
             z[i] += alpha * other.z[i];
         }
+    }
+
+    void erase(std::size_t i){
+        x.erase(x.begin()+i);
+        y.erase(y.begin()+i);
+        z.erase(z.begin()+i);
     }
 };
 
@@ -42,6 +46,10 @@ struct SoAVec3 {
 // Invariant: r, v and a always have the same length.
 struct Particles {
     SoAVec3 r, v, a;
-    explicit Particles(std::size_t n = 0) : r(n), v(n), a(n) {}
-    void add_gravity(Vec3 const &pos,double mass);
+    explicit Particles(std::size_t n = 0) : r(n), v(n), a(n) {};
+    std::size_t len() const {return r.x.size();};
+    void erase(std::size_t i){
+        r.erase(i);
+        v.erase(i);
+        a.erase(i);};
 };
