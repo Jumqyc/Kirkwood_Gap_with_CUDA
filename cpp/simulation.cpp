@@ -1,17 +1,21 @@
 #include "simulation.hpp"
 
+#include <cmath>
+#include <algorithm>
+
 
 Simulation::Simulation(
     std::vector<Planet> planets_,
-        Particles particles_,
-    uint64_t n_step
-){
+    Particles particles_,
+    uint64_t n_step){
     this->planets = planets_;
     this->particles = particles_;
     this->step = 0;
 
     this->n_particles = this->particles.r.x.size();
 
+    this->plant_acc(); 
+    this->particle_acc();
 };
 
 double Simulation::time(){
@@ -31,66 +35,74 @@ void Simulation::plant_acc(){
     }
 }
 
+namespace {
+void gravity_kernel(
+    double* __restrict ax, 
+    double* __restrict ay, 
+    double* __restrict az,
+    const double* __restrict rx, 
+    const double* __restrict ry, 
+    const double* __restrict rz,
+    std::size_t n, 
+    double px,
+    double py, 
+    double pz, 
+    double gm){
+    for (std::size_t i = 0; i < n; ++i){
+        const double dx = px - rx[i], dy = py - ry[i], dz = pz - rz[i];
+        const double r  = std::sqrt(dx*dx + dy*dy + dz*dz);
+        const double r3 = r*r*r;
+        ax[i] += gm*dx/r3;
+        ay[i] += gm*dy/r3;
+        az[i] += gm*dz/r3;
+    }
+}
+}
+
+void Particles::add_gravity(Vec3 const &pos, double mass){
+    gravity_kernel( a.x.data(), 
+                    a.y.data(), 
+                    a.z.data(),
+                    r.x.data(), 
+                    r.y.data(), 
+                    r.z.data(),
+                    r.x.size(), 
+                    pos.x, 
+                    pos.y, 
+                    pos.z, 
+                    G*mass );
+}
+
 void Simulation::particle_acc(){
-    for (uint32_t i = 0; i< this->n_particles ; i++){
+    std::fill(this->particles.a.x.begin(), this->particles.a.x.end(), 0.0);
+    std::fill(this->particles.a.y.begin(), this->particles.a.y.end(), 0.0);
+    std::fill(this->particles.a.z.begin(), this->particles.a.z.end(), 0.0);
 
-        // sun gravity
-        double r3 = std::sqrt(
-            this->particles.r.x[i]*this->particles.r.x[i]
-            + this->particles.r.y[i]*this->particles.r.y[i]
-            + this->particles.r.z[i]*this->particles.r.z[i]
-        );
-        r3 = r3*r3*r3;
-
-        this->particles.a.x[i] = -G*M_Sun * particles.r.x[i]/r3;
-        this->particles.a.y[i] = -G*M_Sun * particles.r.y[i]/r3;
-        this->particles.a.z[i] = -G*M_Sun * particles.r.z[i]/r3;
-
-        // planet gravity
-
-        for (Planet &p : this->planets){
-            double dx = p.r.x - this->particles.r.x[i];
-            double dy = p.r.y - this->particles.r.y[i];
-            double dz = p.r.z - this->particles.r.z[i];
-
-            r3 = std::sqrt(dx*dx+dy*dy+dz*dz);
-            r3 = r3*r3*r3;
-
-            this->particles.a.x[i] += G*p.mass * dx/r3;
-            this->particles.a.y[i] += G*p.mass * dy/r3;
-            this->particles.a.z[i] += G*p.mass * dz/r3;
-        }
+    this->particles.add_gravity(Vec3({0,0,0}),1);
+    for (Planet const &p: this->planets){
+        this->particles.add_gravity(p.r, p.mass);
     };
+
 };
 
 
 void Simulation::forward(){
-    // naive version:
-
-    this->plant_acc();
-    this->particle_acc();
-    
-
-    this->step += 1;
+    // leapfrog
 
     for (Planet &p : this->planets){
-        p.r.x += p.v.x;
-        p.r.y += p.v.y;
-        p.r.z += p.v.z;
+        p.v.add_scaled(0.5,p.a);
+        p.r.add_scaled(1,p.v);
+    };
+    particles.v.add_scaled(0.5,particles.a);
+    particles.r.add_scaled(1,particles.v);
 
-        p.v.x += p.a.x;
-        p.v.y += p.a.y;
-        p.v.z += p.a.z;
-    }
+    this->plant_acc(); this->particle_acc();
 
-    for (uint32_t i = 0; i < this->n_particles ; i++){
-        particles.r.x[i] += particles.v.x[i];
-        particles.r.y[i] += particles.v.y[i];
-        particles.r.z[i] += particles.v.z[i];
+    for (Planet &p : this->planets){
+        p.v.add_scaled(0.5,p.a);
+    };
+    particles.v.add_scaled(0.5,particles.a);
 
-        particles.v.x[i] += particles.a.x[i];
-        particles.v.y[i] += particles.a.y[i];
-        particles.v.z[i] += particles.a.z[i];
-    }
+    this->step += 1;
 
 }

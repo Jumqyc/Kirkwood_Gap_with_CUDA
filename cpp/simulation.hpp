@@ -1,6 +1,9 @@
-#include <cmath>
+#pragma once
+
 #include <cstdint>
 #include <vector>
+
+#include "vec3.hpp"
 
 
 // We will set M_sun = AU = day = 1
@@ -10,25 +13,13 @@ constexpr double M_Saturn = 0.00028564603527829116;
 
 constexpr double dt = 1; // in days
 
-constexpr double G = 0.00029592190063820864 * dt * dt; 
+constexpr double G = 0.00029592190063820864 * dt * dt;
 // G in units of AU^3 / (Msun * dt^2)
 
-struct SoAVec3 {
-    std::vector<double> x, y, z;
-    explicit SoAVec3(std::size_t n = 0) : x(n), y(n), z(n) {}
-};
-
-struct Particles {
-    SoAVec3 r, v, a;
-    explicit Particles(std::size_t n = 0) : r(n), v(n), a(n) {}
-};
-
-struct Vec3
-{
-    double x,y,z;
-};
-
-struct Planet 
+// A massive body, in the heliocentric frame with the Sun pinned at the origin.
+// Note: v and a are per *step*, not per day -- dt is folded into G above, so a
+// velocity written here means AU per step and changes meaning if dt changes.
+struct Planet
 {
     double mass;
     Vec3 r,v,a;
@@ -42,8 +33,11 @@ class Simulation{
         uint64_t n_step
     );
     ~Simulation(){};
-    Particles get_particles(){return this->particles;};
-    std::vector<Planet> get_planets(){return this->planets;};
+
+    // Return a reference to the internal arrays; no copy, no allocation.
+    const Particles& get_particles() const {return this->particles;}
+    const std::vector<Planet>& get_planets() const {return this->planets;}
+
     double time();
 
     
