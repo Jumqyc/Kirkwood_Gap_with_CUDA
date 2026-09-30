@@ -231,24 +231,36 @@ void Simulation::run(const std::string &dump_dir, std::uint64_t epoch_every)
     }
 }
 
-void Simulation::one_step()
+
+
+  void Simulation::yoshida_step()
+  {
+
+    constexpr double W1 =  1.3512071919596578;
+    constexpr double W0 = -1.7024143839193153;
+    this->leapfrog(W1);
+    this->leapfrog(W0);
+    this->leapfrog(W1);
+    step += 1;
+  }
+
+void Simulation::leapfrog(double h)
 {
     // leapfrog
     for (Planet &p : this->planets)
     {
-        p.v.add_scaled(0.5, p.a);
-        p.r.add_scaled(1, p.v);
+        p.v.add_scaled(0.5*h, p.a);
+        p.r.add_scaled(1*h, p.v);
     };
-    particles.v.add_scaled(0.5, particles.a);
-    particles.r.add_scaled(1, particles.v);
+    particles.v.add_scaled(0.5*h, particles.a);
+    particles.r.add_scaled(1*h, particles.v);
     this->plant_acc();
     this->particle_acc();
     for (Planet &p : this->planets)
     {
-        p.v.add_scaled(0.5, p.a);
+        p.v.add_scaled(0.5*h, p.a);
     };
-    particles.v.add_scaled(0.5, particles.a);
-    this->step += 1;
+    particles.v.add_scaled(0.5*h, particles.a);
 }
 
 namespace

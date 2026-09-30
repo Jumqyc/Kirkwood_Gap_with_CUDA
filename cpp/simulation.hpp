@@ -3,27 +3,9 @@
 #include <cstdint>
 #include <vector>
 #include <string>
-#include <omp.h>
 
+#include "physics.hpp"
 #include "vec3.hpp"
-
-
-namespace ph{
-// We will set M_sun = AU = day = 1
-constexpr double M_Sun = 1;                         // Sun mass
-constexpr double M_Jupiter = 0.000954500308024994;  // Jupiter mass
-constexpr double M_Saturn = 0.00028564603527829116; // Saturn mass
-
-constexpr double dt = 10; // one time step in days
-
-constexpr double G = 0.00029592190063820864 * dt * dt; // G in units of AU^3 / (Msun * dt^2)
-
-constexpr std::int32_t separation = 1024;
-
-// A test particle is removed once it comes inside this radius, in AU. 1.524 is
-// Mars's semimajor axis, so reaching it means the orbit is Mars-crossing.
-constexpr double REMOVE_BELOW_AU = 1.524;
-}
 
 // A massive body, in the heliocentric frame with the Sun pinned at the origin.
 // Note: v and a are per *step*, not per day -- dt is folded into G above, so a
@@ -117,7 +99,8 @@ private:
     std::uint64_t tot_step;      // total steps to take
     void plant_acc();            // update planet acceleration
     void particle_acc();         // update particle acceleration
-    void one_step();              // one step in simulation
-    void forward(std::size_t step){for(std::size_t i=0;i<step;i++) one_step();}
+    void yoshida_step();         // one yoshida_step
+    void leapfrog(double h);             // one leapfrog step in simulation
+    void forward(std::size_t step){for(std::size_t i=0;i<step;i++) yoshida_step();}
     void cull();                 // delete all particles within the mars orbit
 };
