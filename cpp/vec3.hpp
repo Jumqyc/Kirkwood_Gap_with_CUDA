@@ -31,7 +31,12 @@ struct SoAVec3 {
     /// @param alpha the scale
     /// @param other the other vector to be added
     void add_scaled(double alpha, const SoAVec3 &other){
+        // Guarded because nvcc includes this header for the CUDA build without
+        // OpenMP enabled, and an unknown pragma is a warning. The loop is still
+        // correct sequentially, just slower.
+#ifdef _OPENMP
         #pragma omp parallel for simd
+#endif
         for (std::size_t i = 0; i < x.size(); ++i){
             x[i] += alpha * other.x[i];
             y[i] += alpha * other.y[i];

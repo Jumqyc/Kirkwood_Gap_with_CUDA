@@ -1,5 +1,7 @@
 #include "simulation.hpp"
 
+#include "epoch_file.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -263,65 +265,12 @@ void Simulation::leapfrog(double h)
     particles.v.add_scaled(0.5*h, particles.a);
 }
 
-namespace
-{
-// Writes every element of `v` as raw bytes. Taking the container rather than a
-// pointer keeps the element count attached to the data: sizeof on a
-// std::vector<double> is 24, the three pointers of the object, not the
-// elements -- so writing sizeof would silently truncate the record.
-void write_doubles(std::ofstream &out, const std::vector<double> &v)
-{
-    out.write(
-        reinterpret_cast<const char *>(v.data()),
-        static_cast<std::streamsize>(v.size() * sizeof(double)));
-}
-} // namespace
-
 void Simulation::dump(const std::string &path) const
 {
-    std::ofstream f(path, std::ios::binary);
-    if (!f)
-        throw std::runtime_error("dump: cannot open " + path);
-
-    const std::uint32_t magic_version[2] = {0x4B49524Bu, 1u};
-    const std::uint64_t n_planet = this->planets.size();
-    const double constants[2] = {ph::dt, ph::G};
-    f.write(reinterpret_cast<const char *>(magic_version), sizeof(magic_version));
-    f.write(reinterpret_cast<const char *>(&n_planet), sizeof(n_planet));
-    f.write(reinterpret_cast<const char *>(constants), sizeof(constants));
-
-    const std::uint64_t n_alive = this->particles.len();
-    const std::uint64_t record[2] = {n_alive, this->step};
-    f.write(reinterpret_cast<const char *>(record), sizeof(record));
-
-    // Planets are AoS in memory, so they need one interleaving pass. There are
-    // only a handful of them, so the copy costs nothing.
-    std::vector<double> body_state(6 * this->planets.size());
-    for (std::size_t b = 0; b < this->planets.size(); ++b)
-    {
-        const Planet &p = this->planets[b];
-        body_state[6 * b + 0] = p.r.x;
-        body_state[6 * b + 1] = p.r.y;
-        body_state[6 * b + 2] = p.r.z;
-        body_state[6 * b + 3] = p.v.x;
-        body_state[6 * b + 4] = p.v.y;
-        body_state[6 * b + 5] = p.v.z;
-    }
-    write_doubles(f, body_state);
-
-    // The particle arrays are already SoA, so these six writes go straight out
-    // of the simulation's own memory with no transposition.
-    write_doubles(f, this->particles.r.x);
-    write_doubles(f, this->particles.r.y);
-    write_doubles(f, this->particles.r.z);
-    write_doubles(f, this->particles.v.x);
-    write_doubles(f, this->particles.v.y);
-    write_doubles(f, this->particles.v.z);
-
-    // failbit is sticky, so this one check after the flush covers every write
-    // above. The destructor would otherwise swallow the error and leave a
-    // truncated file with a zero exit status.
-    f.close();
-    if (!f)
-        throw std::runtime_error("dump: write failed for " + path);
+    // The layout lives in cpp/epoch_file.hpp, next to the GPU build's call to
+    // the same function. Two writers, one definition.
+    write_epoch(path, this->step, this->planets, this->particles.len(),
+                this->particles.r.x.data(), this->particles.r.y.data(),
+                this->particles.r.z.data(), this->particles.v.x.data(),
+                this->particles.v.y.data(), this->particles.v.z.data());
 }

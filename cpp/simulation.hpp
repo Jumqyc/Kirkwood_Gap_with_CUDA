@@ -4,17 +4,9 @@
 #include <vector>
 #include <string>
 
+#include "body.hpp"
 #include "physics.hpp"
 #include "vec3.hpp"
-
-// A massive body, in the heliocentric frame with the Sun pinned at the origin.
-// Note: v and a are per *step*, not per day -- dt is folded into G above, so a
-// velocity written here means AU per step and changes meaning if dt changes.
-struct Planet
-{
-    double mass;
-    Vec3 r, v, a;
-};
 
 // Massless test particles in SoA layout.
 // Invariant: r, v and a always have the same length.
@@ -55,24 +47,8 @@ public:
     // Args:
     //   path: output file path; its directory must already exist.
     // Returns: nothing.
-    // Throws: std::runtime_error if the file cannot be opened, or if any
-    //   write or the final flush fails. ofstream sets failbit rather than
-    //   throwing, and a short write would leave a file that the reader
-    //   silently misreads as a smaller epoch -- so this check is required.
-    //
-    // Layout, little-endian, no padding. `n_planet` and `n_alive` are the two
-    // counts a reader needs; everything after them is fixed-width f64.
-    //   u32 magic = 0x4B49524B ("KIRK"), u32 version = 1
-    //   u64 n_planet
-    //   f64 dt_days, f64 G
-    //   u64 n_alive, u64 step
-    //   f64 planet[6 * n_planet]    r.x r.y r.z v.x v.y v.z, interleaved
-    //   f64 particle[6 * n_alive]   x[n] y[n] z[n] vx[n] vy[n] vz[n], i.e. six
-    //                               consecutive blocks, matching the SoA
-    //                               layout already in memory
-    // `G` is in AU^3 / (M_sun * step^2), consistent with the per-step
-    // velocities. The orbital-element formulas cancel the step unit, so a
-    // reader never needs to convert to days.
+    // Throws: std::runtime_error on an I/O failure.
+    // The layout is defined once, in cpp/epoch_file.hpp.
     void dump(const std::string &path) const;
 
     // Simulated time since the start of the run, in years.

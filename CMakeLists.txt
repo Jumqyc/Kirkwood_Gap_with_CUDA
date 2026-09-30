@@ -28,9 +28,12 @@ target_compile_options(kirkwood PRIVATE
   find_package(OpenMP REQUIRED)
   target_link_libraries(kirkwood PRIVATE OpenMP::OpenMP_CXX)
 
-# The GPU port is deliberately separate: it includes nothing from cpp/. The CPU
-# build is the reference the GPU build is checked against, so it stays untouched
-# until the two agree.
+# The two builds share cpp/: the unit system, the initial conditions, the
+# command line and the epoch file format all live there, because a constant or a
+# layout written down twice is one that eventually disagrees with itself. What
+# is NOT shared is the integration itself -- cpp/simulation.cpp is the reference
+# cuda/gpu_simulation.cu is checked against, and keeping them separate is what
+# makes the check meaningful.
 #
 # Guarded with check_language so the CPU target above still configures on a
 # machine with no CUDA toolkit.
@@ -42,8 +45,8 @@ if(CMAKE_CUDA_COMPILER)
   # 89 is Ada (RTX 40 series). Pinning the architecture embeds no PTX, which
   # keeps the build fast; the binary then runs only on this architecture.
   set(CMAKE_CUDA_ARCHITECTURES 89)
-  # 20, not 17: main.cu uses std::numbers. The CPU target above is on 23; nvcc
-  # 12.0 does not implement all of 23, so the two sides differ here.
+  # 20, not 17: the shared headers use std::numbers. The CPU target above is on
+  # 23; nvcc 12.0 does not implement all of 23, so the two sides differ here.
   set(CMAKE_CUDA_STANDARD 20)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
@@ -53,7 +56,14 @@ if(CMAKE_CUDA_COMPILER)
   add_executable(kirkwood_gpu_hello cuda/hello.cu)
   target_compile_options(kirkwood_gpu_hello PRIVATE -Wall -Wextra)
 
-  add_executable(kirkwood_gpu cuda/main.cu)
-  target_compile_options(kirkwood_gpu PRIVATE -Wall -Wextra )
-  target_compile_options(kirkwood_gpu PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>)
+  add_executable(kirkwood_gpu
+    cuda/main.cu
+    cuda/gpu_simulation.cu)
+  target_compile_options(kirkwood_gpu PRIVATE -Wall -Wextra)
+
+  # No --use_fast_math. It was tried and measured at 1.00x: the SASS is
+  # byte-for-byte identical with and without it, because it mostly affects FP32
+  # sqrt and division, and this kernel's hot spot is a plain rsqrtf, which it
+  # does not touch. The FP64 force was what actually mattered and it was fixed
+  # by writing float in the source.
 endif()
