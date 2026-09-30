@@ -10,8 +10,9 @@ struct Vec3
 {
     double x,y,z;
 
-    // Adds alpha * other into this, in place. No temporary, no allocation.
-    
+    /// @brief self += alpha * other
+    /// @param alpha the scalar
+    /// @param other the vector to be added to self
     void add_scaled(double alpha, const Vec3 &other){
         x += alpha * other.x;
         y += alpha * other.y;
@@ -26,6 +27,9 @@ struct SoAVec3 {
 
     explicit SoAVec3(std::size_t n = 0) : x(n), y(n), z(n) {}
 
+    /// @brief self += alpha * other. 
+    /// @param alpha the scale
+    /// @param other the other vector to be added
     void add_scaled(double alpha, const SoAVec3 &other){
         #pragma omp parallel for simd
         for (std::size_t i = 0; i < x.size(); ++i){
@@ -35,6 +39,8 @@ struct SoAVec3 {
         }
     }
 
+    /// @brief erase the ith element 
+    /// @param i  index of the element to be erased
     void erase(std::size_t i){
         x.erase(x.begin()+i);
         y.erase(y.begin()+i);
@@ -42,14 +48,4 @@ struct SoAVec3 {
     }
 };
 
-// Massless test particles in SoA layout.
-// Invariant: r, v and a always have the same length.
-struct Particles {
-    SoAVec3 r, v, a;
-    explicit Particles(std::size_t n = 0) : r(n), v(n), a(n) {};
-    std::size_t len() const {return r.x.size();};
-    void erase(std::size_t i){
-        r.erase(i);
-        v.erase(i);
-        a.erase(i);};
-};
+

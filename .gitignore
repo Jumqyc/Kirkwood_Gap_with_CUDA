@@ -4,3 +4,6 @@ build*/
 
 tmp/
 profiling/
+data/
+
+__pycache__
