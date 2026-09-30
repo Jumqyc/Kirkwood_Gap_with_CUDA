@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 // The unit system and the constants derived in it.
@@ -29,4 +30,11 @@ constexpr std::int32_t separation = 1024;
 // A test particle is removed once it comes inside this radius, in AU. 1.524 is
 // Mars's semimajor axis, so reaching it means the orbit is Mars-crossing.
 constexpr double REMOVE_BELOW_AU = 1.524;
+
+// The largest number of massive bodies the force kernels are built for. The CPU
+// kernel unrolls to this count with a template, so raising it means one more
+// switch line in particle_acc(); the GPU kernel loops at run time and only
+// needs the array bound. Going over is a thrown error, never a silent
+// truncation.
+constexpr std::size_t MAX_BODIES = 5;
 } // namespace ph

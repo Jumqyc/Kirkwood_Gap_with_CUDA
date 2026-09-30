@@ -6,7 +6,25 @@
 #include <vector>
 
 #include "../cpp/body.hpp"
+#include "../cpp/physics.hpp"
 #include "../cpp/vec3.hpp"
+
+// Where every massive body is during every sub-step of one outer step, shaped
+// the way the kernel wants it.
+//
+// Passed to the kernel BY VALUE. It is a couple of hundred bytes, kernel
+// arguments travel with the launch, and that keeps a device copy out of the
+// inner loop -- a per-step cudaMemcpy of even 200 bytes costs more than the
+// arithmetic it feeds.
+//
+// Body 0 is the Sun, pinned at the origin, so its positions are all zero and
+// the kernel needs no special case for it.
+struct BodyTable
+{
+    float pos[3][ph::MAX_BODIES][3] = {}; // [sub-step][body][x y z], in AU
+    float gm[ph::MAX_BODIES] = {};        // G*M, in AU^3 / step^2
+    int nb = 0;                           // bodies actually filled in
+};
 
 // The GPU half of the simulation.
 //
@@ -57,9 +75,9 @@ private:
     // Brings the state back from the device and writes one epoch file.
     void dump(const std::string &path) const;
 
-    // Launches one outer step, given the perturber's position during each of
-    // the three Yoshida sub-steps.
-    void launch(const std::array<Vec3, 3> &perturber);
+    // Launches one outer step, given where the massive bodies are during each
+    // of the three Yoshida sub-steps.
+    void launch(const BodyTable &bodies);
 
     std::vector<Planet> planets_;
 

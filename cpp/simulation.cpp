@@ -42,10 +42,6 @@ void Simulation::plant_acc()
     }
 }
 
-// Upper bound on the number of massive bodies: the Sun plus the planets.
-// Raising it means one more switch line in particle_acc.
-constexpr std::size_t MAX_BODIES = 5;
-
 namespace
 {
 
@@ -145,10 +141,10 @@ void Simulation::particle_acc()
     // The Sun first, then the planets. Both are stack arrays, so this costs
     // nothing per step and allocates nothing.
     const std::size_t nb = 1 + this->planets.size();
-    if (nb > MAX_BODIES)
-        throw std::runtime_error("raise MAX_BODIES");
-    std::array<double, 3 * MAX_BODIES> body_pos{};
-    std::array<double, MAX_BODIES> body_gm{};
+    if (nb > ph::MAX_BODIES)
+        throw std::runtime_error("raise ph::MAX_BODIES");
+    std::array<double, 3 * ph::MAX_BODIES> body_pos{};
+    std::array<double, ph::MAX_BODIES> body_gm{};
     body_gm[0] = ph::G * ph::M_Sun;
     for (std::size_t b = 0; b < this->planets.size(); ++b)
     {

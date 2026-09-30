@@ -15,15 +15,6 @@ int main(int argc, char **argv)
 {
     const Args a = parse_args(argc, argv);
 
-    if (a.with_saturn)
-    {
-        // Not a silent ignore: a run that asked for Saturn and quietly got
-        // Jupiter would be reproducible and wrong.
-        std::cerr << "the GPU build does not integrate Saturn yet; "
-                     "run the CPU build for that\n";
-        return 1;
-    }
-
     if (!a.dump_dir.empty())
         std::filesystem::create_directories(a.dump_dir);
 
