@@ -293,8 +293,9 @@ GpuSimulation::GpuSimulation(std::vector<Planet> planets, std::int64_t n,
                              const double *rx, const double *ry,
                              const double *rz, const double *vx,
                              const double *vy, const double *vz,
-                             std::uint64_t n_step)
-    : planets_(std::move(planets)), n_(n), tot_step_(n_step)
+                             std::uint64_t n_step, std::uint64_t start_step)
+    : planets_(std::move(planets)), n_(n), step_(start_step),
+      tot_step_(n_step)
 {
     const std::size_t bytes = static_cast<std::size_t>(n) * sizeof(double);
 
@@ -379,11 +380,13 @@ void GpuSimulation::dump(const std::string &path) const
 
 void GpuSimulation::run(const std::string &dump_dir, std::uint64_t epoch_every)
 {
-    // Step 0 is the initial condition, matching the CPU build.
-    if (!dump_dir.empty())
+    // Step 0 is the initial condition, matching the CPU build. A resumed run
+    // already has that file on disk, and overwriting it with a mid-run state
+    // would make the output directory describe two different runs at once.
+    if (!dump_dir.empty() && step_ == 0)
         dump(dump_dir + "/epoch_0.bin");
 
-    for (std::uint64_t s = 1; s <= tot_step_; ++s)
+    for (std::uint64_t s = step_ + 1; s <= tot_step_; ++s)
     {
         // The host advances the bodies through the three sub-steps and hands
         // the kernel a table of where they were.

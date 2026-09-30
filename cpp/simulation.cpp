@@ -13,12 +13,18 @@
 Simulation::Simulation(
     std::vector<Planet> planets_,
     Particles particles_,
-    uint64_t n_step)
+    uint64_t n_step,
+    uint64_t start_step)
 {
     this->planets = planets_;
     this->particles = particles_;
     this->tot_step = n_step;
-    this->step = 0;
+    // Steps already taken before this object existed, i.e. the step number of
+    // the epoch the state was read from. run() continues from here.
+    this->step = start_step;
+    // Both are recomputed from the positions rather than restored: the epoch
+    // format does not store the acceleration, because it is a function of the
+    // positions. That is what makes resuming well defined.
     this->plant_acc();
     this->particle_acc();
 };
@@ -194,7 +200,9 @@ void Simulation::cull()
 
 void Simulation::run(const std::string &dump_dir, std::uint64_t epoch_every)
 {
-    const std::uint64_t bursts = this->tot_step / ph::separation;
+    // On a resumed run `step` is already the step number of the epoch the state
+    // came from, so only the remainder is left to integrate.
+    const std::uint64_t bursts = (this->tot_step - this->step) / ph::separation;
     const std::uint64_t bursts_per_epoch =
         std::max<std::uint64_t>(1, epoch_every / ph::separation);
     const auto epoch_path = [&dump_dir, this]()
@@ -202,8 +210,10 @@ void Simulation::run(const std::string &dump_dir, std::uint64_t epoch_every)
 
     // Step 0 is the initial condition. Every later epoch is read against it,
     // and it is the only one whose semimajor axes are known analytically, so
-    // the reader uses it to check itself.
-    if (!dump_dir.empty())
+    // the reader uses it to check itself. A resumed run already has that file,
+    // and overwriting it with a mid-run state would make the directory describe
+    // two different runs at once.
+    if (!dump_dir.empty() && this->step == 0)
         this->dump(epoch_path());
 
     for (std::uint64_t s = 0; s < bursts; ++s)

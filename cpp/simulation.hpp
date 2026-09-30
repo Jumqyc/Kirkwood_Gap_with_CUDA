@@ -32,10 +32,21 @@ struct Particles
 class Simulation
 {
 public:
+    // Args:
+    //   planets_: massive bodies in the heliocentric frame.
+    //   particles_: massless test particles, SoA layout. Positions in AU,
+    //     velocities in AU per step. The acceleration is recomputed from the
+    //     positions rather than restored, which is why the epoch format does not
+    //     have to store it and a resumed run is well defined.
+    //   n_step: total outer steps to take, in units of dt days.
+    //   start_step: steps already taken before this object existed, i.e. the
+    //     step number of the epoch the state came from. run() continues from
+    //     start_step + 1; 0 means a fresh run.
     Simulation(
         std::vector<Planet> planets_,
         Particles particles_,
-        uint64_t n_step);
+        uint64_t n_step,
+        uint64_t start_step = 0);
     ~Simulation() {};
 
     // Return a reference to the internal arrays; no copy, no allocation.

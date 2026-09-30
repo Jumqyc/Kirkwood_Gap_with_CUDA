@@ -1,9 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include "body.hpp"
@@ -99,4 +101,122 @@ void write_epoch(const std::string &path, std::uint64_t step,
     f.close();
     if (!f)
         throw std::runtime_error("write_epoch: write failed for " + path);
+}
+
+// The state one epoch file describes. Mirrors Epoch in python/kirkwood_io.py,
+// which is the other reader of the same bytes.
+//
+// Note what is NOT here: the acceleration. It is a function of the positions,
+// so a resumed run recomputes it rather than storing it -- which is also why
+// the file format did not have to change to support resuming.
+struct EpochState
+{
+    std::uint64_t step = 0; // steps already taken, in units of dt_days
+    double dt_days = 0.0;
+    double G = 0.0; // AU^3 / (M_sun * step^2), velocities are per step
+    std::vector<Planet> planets;
+    std::vector<double> rx, ry, rz, vx, vy, vz; // all of length n_alive
+};
+
+// Reads one epoch file back.
+// Args:
+//   path: an epoch file written by write_epoch().
+// Returns:
+//   The state it holds. Positions in AU, velocities in AU per step. The bodies
+//   carry zero mass, because the format does not store it -- the caller knows
+//   what it put in and keeps its own copy.
+// Throws:
+//   std::runtime_error if the file cannot be opened, is shorter than its header
+//   claims, or carries a magic or version this build does not know. A truncated
+//   file is the expected aftermath of a hard kill, and reading it as a valid
+//   shorter epoch would corrupt a resumed run silently.
+inline EpochState read_epoch(const std::string &path)
+{
+    std::ifstream f(path, std::ios::binary);
+    if (!f)
+        throw std::runtime_error("read_epoch: cannot open " + path);
+
+    const auto get = [&f](void *p, std::size_t bytes)
+    { f.read(reinterpret_cast<char *>(p), static_cast<std::streamsize>(bytes)); };
+
+    std::uint32_t magic = 0, version = 0;
+    std::uint64_t n_planet = 0, n_alive = 0;
+    EpochState s;
+
+    get(&magic, sizeof(magic));
+    get(&version, sizeof(version));
+    if (magic != 0x4B49524Bu)
+        throw std::runtime_error("read_epoch: not an epoch file: " + path);
+    if (version != 1u)
+        throw std::runtime_error("read_epoch: version " +
+                                 std::to_string(version) +
+                                 " is not supported: " + path);
+    get(&n_planet, sizeof(n_planet));
+    get(&s.dt_days, sizeof(s.dt_days));
+    get(&s.G, sizeof(s.G));
+    get(&n_alive, sizeof(n_alive));
+    get(&s.step, sizeof(s.step));
+
+    std::vector<double> body(6 * n_planet);
+    get(body.data(), body.size() * sizeof(double));
+    s.planets.resize(n_planet);
+    for (std::size_t b = 0; b < n_planet; ++b)
+    {
+        s.planets[b].r = Vec3{body[6 * b + 0], body[6 * b + 1], body[6 * b + 2]};
+        s.planets[b].v = Vec3{body[6 * b + 3], body[6 * b + 4], body[6 * b + 5]};
+        s.planets[b].a = Vec3{0.0, 0.0, 0.0};
+        s.planets[b].mass = 0.0;
+    }
+
+    for (std::vector<double> *block : {&s.rx, &s.ry, &s.rz, &s.vx, &s.vy, &s.vz})
+    {
+        block->resize(n_alive);
+        get(block->data(), block->size() * sizeof(double));
+    }
+
+    // A short read sets failbit, which is how a file cut off mid-write gets
+    // caught here instead of being accepted as a smaller epoch.
+    if (!f)
+        throw std::runtime_error("read_epoch: truncated or short: " + path);
+    return s;
+}
+
+// Finds the highest-numbered epoch_<step>.bin in a directory.
+// Args:
+//   dir: directory to scan.
+// Returns:
+//   The path, or an empty string if the directory holds no epoch files, in
+//   which case the caller should start from the beginning.
+inline std::string newest_epoch(const std::string &dir)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec))
+        return {};
+
+    std::uint64_t best_step = 0;
+    std::string best;
+    for (const fs::directory_entry &e : fs::directory_iterator(dir, ec))
+    {
+        const std::string name = e.path().filename().string();
+        if (name.rfind("epoch_", 0) != 0 || e.path().extension() != ".bin")
+            continue;
+        try
+        {
+            const std::uint64_t step =
+                std::stoull(name.substr(6, name.size() - 6 - 4));
+            if (best.empty() || step > best_step)
+            {
+                best_step = step;
+                best = e.path().string();
+            }
+        }
+        catch (const std::exception &)
+        {
+            // A name that is not a number is not one of ours. Skipping beats
+            // refusing to run because of a stray file in the output directory.
+            continue;
+        }
+    }
+    return best;
 }

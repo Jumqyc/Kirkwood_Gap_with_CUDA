@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <numbers>
 #include <random>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "body.hpp"
@@ -77,6 +79,40 @@ inline std::vector<Planet> make_planets(bool with_saturn)
         planets.push_back(circular_body(ph::M_Saturn, SATURN_A_AU));
     sun_only_acceleration(planets);
     return planets;
+}
+
+// Puts a stored epoch's body positions and velocities back into this run's
+// bodies, keeping the masses this build knows.
+//
+// The epoch format does not store masses -- they belong to the setup, not to the
+// state -- so a resumed run takes them from make_planets() and only the state
+// from the file. The acceleration is recomputed, because the format does not
+// store that either; it is a function of the positions.
+//
+// Args:
+//   planets: this run's bodies, with masses; positions and velocities are
+//     overwritten and the acceleration is refilled.
+//   stored: the bodies as read back from an epoch file; their masses are
+//     ignored.
+// Returns:
+//   Nothing.
+// Throws:
+//   std::runtime_error if the counts differ, which means the epoch came from a
+//   run with a different set of bodies and cannot be continued here.
+inline void restore_planets(std::vector<Planet> &planets,
+                            const std::vector<Planet> &stored)
+{
+    if (planets.size() != stored.size())
+        throw std::runtime_error(
+            "the epoch holds " + std::to_string(stored.size()) +
+            " bodies but this run has " + std::to_string(planets.size()) +
+            "; resume with the same saturn setting");
+    for (std::size_t b = 0; b < planets.size(); ++b)
+    {
+        planets[b].r = stored[b].r;
+        planets[b].v = stored[b].v;
+    }
+    sun_only_acceleration(planets);
 }
 
 // The initial test particles: a disk uniform in semimajor axis on [2.0, 3.5] AU

@@ -49,12 +49,16 @@ public:
     //     instead of a device array refreshed every step.
     //   n: number of test particles.
     //   rx..vz: initial positions in AU and velocities in AU per step, each of
-    //     length n. Copied to the device and not modified.
+    //     length n. Copied to the device and not modified. A resumed run passes
+    //     state read back from an epoch file here instead of a fresh draw.
     //   n_step: total outer steps to take, in units of dt days.
+    //   start_step: steps already taken before this object existed, i.e. the
+    //     step number of the epoch the state came from. run() continues from
+    //     start_step + 1.
     GpuSimulation(std::vector<Planet> planets, std::int64_t n,
                   const double *rx, const double *ry, const double *rz,
                   const double *vx, const double *vy, const double *vz,
-                  std::uint64_t n_step);
+                  std::uint64_t n_step, std::uint64_t start_step = 0);
     ~GpuSimulation();
 
     GpuSimulation(const GpuSimulation &) = delete;
