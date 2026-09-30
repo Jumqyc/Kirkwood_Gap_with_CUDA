@@ -134,20 +134,40 @@ Vec3 planet_substep(std::vector<Planet> &planets, double w)
 }
 
 
+// Adds one body's gravitational acceleration to the accumulator.
+//
+// The force is computed in SINGLE precision on purpose. Nsight Compute reported
+// the FP64 pipeline at 86.8% while the issue slots sat at 2.3%: the kernel is
+// bound by the FP64 pipe, which on this consumer GPU runs at 1/64 the FP32
+// rate. Doing the force in float moves it off that pipe entirely, and rsqrtf is
+// one MUFU instruction rather than the ~20 FP64 operations a double division
+// expands into. Measured: 1.80x at 1e6 particles, 2.24x at 20000.
+//
+// What it costs: per-particle |da| after 1e5 years goes from 1e-14 to 5.2e-4
+// AU. That is 2% of the 0.025 AU gap width, which sounds alarming and is not:
+// the quantity actually measured is a binned distribution, and the difference
+// between this and the double version is 30x smaller than the signal in the
+// worst bin (0.36% on the 2:1 depletion ratio). If a future measurement wants a
+// finer signal than that, this trade has to be re-examined.
+//
+// Positions, velocities and the accumulator itself all stay double. Only the
+// arithmetic between them is float.
 __device__ inline void acceleration(double rx, double ry, double rz,
                               double&ax, double&ay, double&az,
                               double px, double py, double pz,
                             double gm)
 {
-    const double dx = px-rx;
-    const double dy = py-ry;
-    const double dz = pz-rz;
-    double d = std::sqrt(dx*dx+dy*dy+dz*dz);
-    d = d*d*d;
-    d = 1/d;
-    ax += gm*dx*d;
-    ay += gm*dy*d;
-    az += gm*dz*d;
+    const float frx = (float)rx, fry = (float)ry, frz = (float)rz;
+    const float dx = (float)px - frx;
+    const float dy = (float)py - fry;
+    const float dz = (float)pz - frz;
+    const float r2 = dx*dx + dy*dy + dz*dz;
+    const float inv_r = rsqrtf(r2);
+    const float inv_r3 = inv_r*inv_r*inv_r;
+    const float fgm = (float)gm;
+    ax += (double)(fgm*dx*inv_r3);
+    ay += (double)(fgm*dy*inv_r3);
+    az += (double)(fgm*dz*inv_r3);
 }
 
 
