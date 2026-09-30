@@ -50,12 +50,6 @@ if(CMAKE_CUDA_COMPILER)
   set(CMAKE_CUDA_STANDARD 20)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
-  # The smallest complete CUDA program in this project's shape. Build and run
-  # this first: if it works, the toolchain is fine, and any later failure is in
-  # the code rather than in the setup.
-  add_executable(kirkwood_gpu_hello cuda/hello.cu)
-  target_compile_options(kirkwood_gpu_hello PRIVATE -Wall -Wextra)
-
   add_executable(kirkwood_gpu
     cuda/main.cu
     cuda/gpu_simulation.cu)
