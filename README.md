@@ -179,3 +179,7 @@ in a budget from a rate table — and both say so where they are set.
   needs them, and Kozai can lower a perihelion without raising `e`.
 - `python/kirkwood_plot.py` is no longer used; `analysis.ipynb` draws with
   matplotlib directly.
+
+## Licence
+
+MIT. See `LICENSE`.
