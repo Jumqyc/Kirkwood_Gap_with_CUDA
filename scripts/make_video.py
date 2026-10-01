@@ -79,12 +79,17 @@ def run_binary(binary: Path, n_particle: int, n_step: int, dumps: Path,
     """Runs one batch. `n_step` is the total step count in this binary's dt."""
     cmd = [str(binary), str(n_particle), str(n_step), str(dumps),
            str(epoch_every), "0.1", "1", str(seed), "1"]
-    print("    $ " + " ".join(cmd[1:]))
-    subprocess.run(cmd, check=True, capture_output=True)
+    print("    $ " + " ".join(cmd[1:]), flush=True)
+    # The binary prints which epoch it resumed from. That line is the only
+    # evidence the segments are actually chained, so it has to reach the log.
+    done = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    for line in done.stdout.splitlines():
+        if "resuming" in line:
+            print("      " + line.strip(), flush=True)
 
 
 def build_segment(seg: Segment, build: Path, work: Path, frames: int,
-                  chunk: int, n_particle: int, seed: int,
+                  chunk: int, n_particle: int, seed: int, vmax: float,
                   keep_dumps: bool) -> list[Path]:
     """Runs one segment in rounds and returns its rendered frames, in order."""
     # One dump directory for every segment, because that is the channel the
@@ -129,7 +134,7 @@ def build_segment(seg: Segment, build: Path, work: Path, frames: int,
         resonances = resonance_axes(
             semimajor_axis(ep.planet_r[0], ep.planet_v[0], ep.G))
         for path in pending:
-            render(path, frames_dir, resonances, baseline)
+            render(path, frames_dir, resonances, baseline, vmax)
         print(f"    round {done // chunk}: rendered {len(pending)} frames,"
               f" {done}/{frames} in this segment")
 
@@ -163,6 +168,9 @@ def main() -> int:
     parser.add_argument("--chunk", type=int, default=100,
                         help="frames per round, i.e. the disk bound")
     parser.add_argument("--n-particle", type=int, default=100_000)
+    parser.add_argument("--vmax", type=float, default=200.0,
+                        help="top of the density colour scale; scale it with "
+                             "n_particle or the dense core saturates")
     parser.add_argument("--seed", type=int, default=114514)
     parser.add_argument("--only", default=None, help="build one segment, by name")
     parser.add_argument("--keep-dumps", action="store_true")
@@ -181,7 +189,7 @@ def main() -> int:
             continue
         frames = build_segment(seg, args.build, args.work, args.frames,
                                args.chunk, args.n_particle, args.seed,
-                               keep_dumps=args.keep_dumps)
+                               vmax=args.vmax, keep_dumps=args.keep_dumps)
         all_frames.extend(frames)
 
     if args.only is None and not args.no_encode:

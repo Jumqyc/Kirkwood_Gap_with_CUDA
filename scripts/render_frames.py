@@ -112,7 +112,7 @@ def draw_progress(ax: plt.Axes, year: float) -> None:
 
 
 def render(path: Path, frames: Path, resonances: dict[str, float],
-           baseline: np.ndarray) -> Path:
+           baseline: np.ndarray, vmax: float = 200.0) -> Path:
     """Draws one epoch and writes it to `frames`. Returns the file written."""
     epoch = read_epoch(path)
     a, e = elements(epoch)
@@ -124,7 +124,7 @@ def render(path: Path, frames: Path, resonances: dict[str, float],
     right = fig.add_axes([0.535, 0.20, 0.425, 0.68])
 
     left.hist2d(a, e, bins=[A_EDGES, E_EDGES],
-                norm=LogNorm(vmin=1, vmax=200), cmap="magma")
+                norm=LogNorm(vmin=1, vmax=vmax), cmap="magma")
     left.set(xlim=(2.0, 3.5), ylim=(0, 0.72),
              xlabel="semimajor axis (AU)", ylabel="eccentricity")
     left.set_title("density in the (a, e) plane", fontsize=17)
@@ -167,6 +167,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dumps", type=Path)
     parser.add_argument("frames", type=Path)
+    parser.add_argument("--vmax", type=float, default=200.0,
+                        help="top of the density colour scale; the number of "
+                             "particles per bin goes as n_particle, so this has "
+                             "to go with it or the core saturates")
     parser.add_argument("--delete", action="store_true",
                         help="remove the epochs that were rendered, keeping the "
                              "newest so the next round can resume from it")
@@ -185,7 +189,7 @@ def main() -> int:
         semimajor_axis(first.planet_r[0], first.planet_v[0], first.G))
 
     for n, path in enumerate(todo, 1):
-        out = render(path, args.frames, resonances, baseline)
+        out = render(path, args.frames, resonances, baseline, args.vmax)
         if n % 25 == 0 or n == len(todo):
             print(f"  {n}/{len(todo)}  {out.name}")
 
