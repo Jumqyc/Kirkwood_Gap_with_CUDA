@@ -7,3 +7,5 @@ profiling/
 data/
 
 __pycache__/
+# Scratch previews; the finished video lives in docs/.
+preview*.mp4

@@ -41,12 +41,14 @@ from kirkwood_io import elements, read_epoch, resonance_axes, semimajor_axis
 
 MARS_AU = 1.524
 
-# The three segments the video is cut into, as (start_year, end_year). They have
-# to be on screen: the run covers a hundredfold range and a viewer has no way to
-# tell 5 000 years from 500 000 without being told. The progress bar is driven by
-# the global frame number, not by the clock, so each segment fills a third of it.
-SEGMENTS = [(0.0, 10_000.0), (10_000.0, 100_000.0), (100_000.0, 1_000_000.0)]
-SEGMENT_LABELS = ["0-10 kyr", "10-100 kyr", "100 kyr-1 Myr"]
+# The progress bar is a linear 0 - 1 Myr time axis, and the three segments of the
+# video are what happens to lie on it: 0-10 kyr is the first 1 % of the bar,
+# 10-100 kyr the next 9 %, and 100 kyr-1 Myr the remaining 90 %. The marker
+# therefore crawls through the first segment and races through the last, which is
+# the point -- the video spends equal time on each, the bar does not.
+BAR_MIN_YEARS = 10.0        # the left edge; 0 cannot be put on a log axis
+BAR_MAX_YEARS = 1_000_000.0
+SEGMENT_EDGES = (10_000.0, 100_000.0)
 A_EDGES = np.arange(2.0, 3.51, 0.005)
 E_EDGES = np.arange(0.0, 0.72, 0.005)
 RATIO_EDGES = np.arange(2.0, 3.51, 0.01)
@@ -72,30 +74,45 @@ def load_baseline(cache: Path, dumps: Path) -> np.ndarray:
     return counts
 
 
-def draw_progress(ax: plt.Axes, index: int, count: int) -> None:
-    """A bar along the bottom: where the video is, and what runs underneath.
+def draw_progress(ax: plt.Axes, year: float) -> None:
+    """A logarithmic 10 yr - 1 Myr time axis with the current position marked.
 
-    Driven by the frame number rather than by the clock. The three segments span
-    10 kyr, 90 kyr and 900 kyr, so a bar that told the truth about time would put
-    99 % of it in the last third and make the first two invisible.
+    Args:
+        ax: axes to draw into; its limits are set here.
+        year: simulated time of this frame, in years. Values at or below the
+            left edge are clamped to it.
+
+    Linear in time would put the whole first segment, 0-10 kyr, inside the first
+    1 % of the bar, which is not enough to see move. On a log axis the three
+    segments cover 60 %, 20 % and 20 %, so the marker is readable throughout and
+    still moves at three different speeds.
     """
-    ax.set(xlim=(0, 1), ylim=(0, 1))
+    def at(t: float) -> float:
+        """Position of `t` years on the bar, as a fraction of its width."""
+        return float(np.log10(max(t, BAR_MIN_YEARS) / BAR_MIN_YEARS)
+                     / np.log10(BAR_MAX_YEARS / BAR_MIN_YEARS))
+
+    ax.set(xlim=(0.0, 1.0), ylim=(0.0, 1.0))
     ax.axis("off")
-    ax.add_patch(plt.Rectangle((0.0, 0.42), 1.0, 0.30,
+    ax.add_patch(plt.Rectangle((0.0, 0.40), 1.0, 0.30,
                                facecolor="0.90", edgecolor="0.75", lw=0.8))
-    ax.add_patch(plt.Rectangle((0.0, 0.42), (index + 1) / count, 0.30,
+    ax.add_patch(plt.Rectangle((0.0, 0.40), at(year), 0.30,
                                facecolor="#d94a4a", edgecolor="none"))
-    for n, label in enumerate(SEGMENT_LABELS):
-        left = n / len(SEGMENTS)
-        if n:
-            ax.axvline(left, ymin=0.42, ymax=0.72, color="0.45", lw=1.2)
-        ax.text(left + 0.5 / len(SEGMENTS), 0.18, label,
-                ha="center", va="top", fontsize=10, color="0.35")
-    ax.plot([(index + 1) / count], [0.57], marker="v", color="#7a1010", ms=11)
+    decade = 10.0
+    while decade <= BAR_MAX_YEARS:
+        ax.axvline(at(decade), ymin=0.18, ymax=0.40, color="0.6", lw=0.7)
+        label = f"{decade / 1000:.0f} kyr" if decade >= 1000 else f"{decade:.0f} yr"
+        ax.text(at(decade), 0.10, label, ha="center", va="top",
+                fontsize=9, color="0.4")
+        decade *= 10.0
+    # Where the step size changes. Without these the bar looks like one run.
+    for edge in SEGMENT_EDGES:
+        ax.axvline(at(edge), ymin=0.30, ymax=0.78, color="0.35", lw=1.0, ls="--")
+    ax.plot([at(year)], [0.55], marker="v", color="#7a1010", ms=11)
 
 
 def render(path: Path, frames: Path, resonances: dict[str, float],
-           baseline: np.ndarray, index: int = 0, count: int = 1) -> Path:
+           baseline: np.ndarray) -> Path:
     """Draws one epoch and writes it to `frames`. Returns the file written."""
     epoch = read_epoch(path)
     a, e = elements(epoch)
@@ -138,7 +155,7 @@ def render(path: Path, frames: Path, resonances: dict[str, float],
 
     fig.suptitle(f"t = {epoch.time_years:,.0f} yr", fontsize=26, y=0.945)
     bar = fig.add_axes([0.25, 0.035, 0.50, 0.085])
-    draw_progress(bar, index, count)
+    draw_progress(bar, epoch.time_years)
 
     out = frames / f"frame_{epoch.step:09d}.png"
     fig.savefig(out)
@@ -150,10 +167,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dumps", type=Path)
     parser.add_argument("frames", type=Path)
-    parser.add_argument("--index", type=int, default=0,
-                        help="this frame's number in the finished video")
-    parser.add_argument("--count", type=int, default=1,
-                        help="how many frames the finished video has")
     parser.add_argument("--delete", action="store_true",
                         help="remove the epochs that were rendered, keeping the "
                              "newest so the next round can resume from it")
@@ -171,10 +184,8 @@ def main() -> int:
     resonances = resonance_axes(
         semimajor_axis(first.planet_r[0], first.planet_v[0], first.G))
 
-    already = len(paths) - len(todo)
     for n, path in enumerate(todo, 1):
-        out = render(path, args.frames, resonances, baseline,
-                     index=args.index + already + n - 1, count=args.count)
+        out = render(path, args.frames, resonances, baseline)
         if n % 25 == 0 or n == len(todo):
             print(f"  {n}/{len(todo)}  {out.name}")
 
