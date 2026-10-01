@@ -50,10 +50,26 @@ if(CMAKE_CUDA_COMPILER)
   set(CMAKE_CUDA_STANDARD 20)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
-  add_executable(kirkwood_gpu
-    cuda/main.cu
-    cuda/gpu_simulation.cu)
-  target_compile_options(kirkwood_gpu PRIVATE -Wall -Wextra)
+  # One binary per step size. The epoch format stores velocities in AU per step,
+  # so a state written with one dt cannot be read by a binary built with another
+  # without rescaling -- building them separately keeps each run self-contained
+  # and removes the chance of that rescaling being forgotten.
+  #
+  #   kirkwood_gpu        dt = 10 days, what the README's results used
+  #   kirkwood_gpu_dt2    dt = 2, for the first segment of the video
+  #   kirkwood_gpu_dt20   dt = 20, for the last, where nothing is changing
+  foreach(kirkwood_dt 10 2 20)
+    if(kirkwood_dt EQUAL 10)
+      set(kirkwood_target kirkwood_gpu)
+    else()
+      set(kirkwood_target kirkwood_gpu_dt${kirkwood_dt})
+    endif()
+    add_executable(${kirkwood_target}
+      cuda/main.cu
+      cuda/gpu_simulation.cu)
+    target_compile_definitions(${kirkwood_target} PRIVATE PH_DT=${kirkwood_dt})
+    target_compile_options(${kirkwood_target} PRIVATE -Wall -Wextra)
+  endforeach()
 
   # No --use_fast_math. It was tried and measured at 1.00x: the SASS is
   # byte-for-byte identical with and without it, because it mostly affects FP32

@@ -111,8 +111,8 @@ void write_epoch(const std::string &path, std::uint64_t step,
 // the file format did not have to change to support resuming.
 struct EpochState
 {
-    std::uint64_t step = 0; // steps already taken, in units of dt_days
-    double dt_days = 0.0;
+    std::uint64_t step = 0; // steps already taken, in units of the FILE's dt
+    double dt_days = 0.0;   // the step size the velocities were written in
     double G = 0.0; // AU^3 / (M_sun * step^2), velocities are per step
     std::vector<Planet> planets;
     std::vector<double> rx, ry, rz, vx, vy, vz; // all of length n_alive
@@ -122,7 +122,8 @@ struct EpochState
 // Args:
 //   path: an epoch file written by write_epoch().
 // Returns:
-//   The state it holds. Positions in AU, velocities in AU per step. The bodies
+//   The state it holds. Positions in AU, velocities in AU per step of THIS
+//   build's dt -- read_epoch converts them if the file used another one.
 //   carry zero mass, because the format does not store it -- the caller knows
 //   what it put in and keeps its own copy.
 // Throws:
@@ -178,6 +179,31 @@ inline EpochState read_epoch(const std::string &path)
     // caught here instead of being accepted as a smaller epoch.
     if (!f)
         throw std::runtime_error("read_epoch: truncated or short: " + path);
+
+    // Velocities are in AU per step, and a step is dt days -- so the same number
+    // means a different speed in a build with a different dt, by exactly
+    // dt_this_build / dt_file, NOT the other way round -- a velocity is AU per step,
+    // so going to a longer step multiplies it. Resuming without this is silent: the
+    // dt = 2 binary reading a dt = 10 file would run everything at a fifth of its
+    // speed and the orbit would simply be wrong. Accelerations are not stored,
+    // and the semimajor axis is derived from the state, so the velocities are the
+    // only thing that has to move.
+    const double to_this_step = ph::dt / s.dt_days;
+    if (to_this_step != 1.0)
+    {
+        // The step count is in the same unit and needs the same conversion, or
+        // the resumed run's clock jumps: 2000 steps of 2 days is 11 years, and
+        // read as 2000 steps of 10 days it becomes 55. The dynamics are fine
+        // either way, but every time the run reports would be wrong.
+        s.step = static_cast<std::uint64_t>(
+            static_cast<double>(s.step) / to_this_step + 0.5);
+        for (std::vector<double> *block : {&s.vx, &s.vy, &s.vz})
+            for (double &value : *block)
+                value *= to_this_step;
+        for (Planet &p : s.planets)
+            p.v = Vec3{p.v.x * to_this_step, p.v.y * to_this_step,
+                       p.v.z * to_this_step};
+    }
     return s;
 }
 
@@ -194,28 +220,38 @@ inline std::string newest_epoch(const std::string &dir)
     if (!fs::is_directory(dir, ec))
         return {};
 
-    std::uint64_t best_step = 0;
+    // Ordered by the simulated time, not by the step number in the file name.
+    // Those are the same thing only while the step size never changes: a run
+    // continued across a dt transition leaves a dt=2 epoch_2000 next to a dt=10
+    // epoch_450, and by number alone the older one looks newer, so every restart
+    // would resume from it and never move.
+    double best_time = -1.0;
     std::string best;
     for (const fs::directory_entry &e : fs::directory_iterator(dir, ec))
     {
         const std::string name = e.path().filename().string();
         if (name.rfind("epoch_", 0) != 0 || e.path().extension() != ".bin")
             continue;
-        try
-        {
-            const std::uint64_t step =
-                std::stoull(name.substr(6, name.size() - 6 - 4));
-            if (best.empty() || step > best_step)
-            {
-                best_step = step;
-                best = e.path().string();
-            }
-        }
-        catch (const std::exception &)
-        {
-            // A name that is not a number is not one of ours. Skipping beats
-            // refusing to run because of a stray file in the output directory.
+        // Only the header is needed for dt_days and step, and it is 96 bytes.
+        std::ifstream f(e.path(), std::ios::binary);
+        if (!f)
             continue;
+        std::uint32_t head[2] = {};
+        std::uint64_t n_planet = 0, step = 0, n_alive = 0;
+        double dt_days = 0.0, G = 0.0;
+        f.read(reinterpret_cast<char *>(head), sizeof(head));
+        f.read(reinterpret_cast<char *>(&n_planet), sizeof(n_planet));
+        f.read(reinterpret_cast<char *>(&dt_days), sizeof(dt_days));
+        f.read(reinterpret_cast<char *>(&G), sizeof(G));
+        f.read(reinterpret_cast<char *>(&n_alive), sizeof(n_alive));
+        f.read(reinterpret_cast<char *>(&step), sizeof(step));
+        if (!f || head[0] != 0x4B49524Bu)
+            continue;
+        const double when = static_cast<double>(step) * dt_days;
+        if (when > best_time)
+        {
+            best_time = when;
+            best = e.path().string();
         }
     }
     return best;

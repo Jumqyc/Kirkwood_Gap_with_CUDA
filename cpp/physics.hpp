@@ -19,7 +19,14 @@ constexpr double M_Sun = 1;                         // Sun mass
 constexpr double M_Jupiter = 0.000954500308024994;  // Jupiter mass
 constexpr double M_Saturn = 0.00028564603527829116; // Saturn mass
 
-constexpr double dt = 2; // one time step in days
+// One time step in days. Overridable at compile time so that several step sizes
+// can be built from one source tree -- a convergence check, or the three
+// resolutions a video is cut into. 10 is the value every result in the README
+// was produced with.
+#ifndef PH_DT
+#define PH_DT 10
+#endif
+constexpr double dt = PH_DT;
 
 // G in units of AU^3 / (Msun * dt^2). The step size is folded in here, so every
 // quantity below is per *step*, not per day.
