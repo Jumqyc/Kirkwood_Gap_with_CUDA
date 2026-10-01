@@ -1,0 +1,181 @@
+# Kirkwood gaps in the Sun–Jupiter restricted problem
+
+A test-particle simulation of the asteroid belt's resonant structure, written as
+a symplectic integrator and used as the vehicle for an HPC exercise: the same
+physics on the CPU and on the GPU, measured and compared.
+
+The answer it arrives at is that **the 3:1 and 5:2 gaps need two ingredients at
+once, and neither works alone**: perturbers with eccentric orbits, which is what
+makes the ν₅ and ν₆ secular resonances exist, and a removal mechanism, without
+which the particles the resonances excite stay where they are.
+
+## Results
+
+The measure throughout is the **depletion ratio**: particles within ±0.025 AU of
+a resonance at the end of a run, divided by the number there at the start.
+
+All three at 0.3 Myr, 10⁵ particles, same seed, window ±0.025 AU:
+
+| configuration | 2:1 | 3:1 | 5:2 | 4:1 | 7:3 |
+|---|---|---|---|---|---|
+| circular Jupiter + Saturn, no removal | 0.842 | 0.998 | 1.006 | 0.997 | 0.994 |
+| eccentric Jupiter + Saturn, no removal | 0.888 | 0.991 | 1.008 | 0.998 | 1.007 |
+| eccentric, **Mars-crossing removal** | 0.888 | **0.904** | **0.909** | 0.982 | 1.007 |
+
+A window holds about 3285 particles, so 1σ is 1.7%.
+
+Two things are worth more than the third decimal. The 4:1 and the 7:3 stay flat
+in every configuration. And the 2:1 is unmoved by removal — its particles never
+reach the Mars line — while the 3:1 and the 5:2 both open by about 9%. That is
+the same split the literature draws between the Hecuba gap and the rest.
+
+The baseline for these ratios excludes only particles that are Mars-crossing at
+t = 0, of which there are none here. It does not exclude the ones that cross
+later: those are exactly what the mechanism removed, and dropping them from the
+denominator as well is what made an earlier version of this table report 0.990
+for the 3:1 and hide the effect entirely.
+
+Two animated views of the (a, e) plane, one frame per stored snapshot:
+
+![eccentric Jupiter and Saturn, 10-day steps](docs/ae_ecc_dt10.gif)
+
+![the same with 2-day steps, over a shorter span](docs/ae_ecc_dt2.gif)
+
+The spikes that stand at every resonance line, well above the Mars-crossing
+curve, are the population the removal step acts on. The structures grow over
+roughly 3–7 × 10⁴ years and then stop moving.
+
+## What the model is
+
+- Sun, Jupiter, and optionally Saturn, on prescribed orbits about the origin.
+  The perturbers feel the Sun only, so they do not pull on each other; this is
+  the restricted problem, and it is enough for the secular resonances because the
+  test particles feel every body.
+- Massless, non-interacting test particles: 10⁵ of them, semimajor axis uniform
+  on [2.0, 3.5] AU, eccentricity uniform on [0, e_max], every one placed at
+  perihelion.
+- Units are AU, day and M☉. `G` is folded per step, so velocities are AU per
+  *step*, not per day, and `dt` is 10 days unless `scripts/` is told otherwise.
+- The integrator is a kick–drift–kick leapfrog composed into Yoshida's
+  fourth-order scheme, S₂(w₁)S₂(w₀)S₂(w₁) with w₁ = 1.3512…, w₀ = −1.7024….
+  Self-convergence measures order p = 4.00, against p = 1.98 for plain leapfrog
+  as a control. See `docs/` history in `git log` for the derivation.
+- Removal is **not** part of the integration. The test particles do not interact,
+  so deleting one leaves every other trajectory untouched, which makes removal
+  equivalent to screening the stored snapshots afterwards. Removing one from a
+  trajectory costs seconds instead of another night of GPU time, and it is why
+  the runs keep every particle.
+
+## Layout
+
+```
+cpp/                    shared by both builds
+  physics.hpp           units, constants, the perturbers' orbital elements
+  body.hpp  vec3.hpp    Planet, and the SoA vector types
+  setup.hpp             the perturbers and the initial draw
+  args.hpp              the command line, and the one-line summary
+  epoch_file.hpp        the epoch file: the only definition of the format
+  simulation.hpp/.cpp   the CPU integrator, which is the reference
+  main.cpp
+cuda/
+  gpu_simulation.hpp/.cu   the device half: kernels plus the owning class
+  main.cu
+python/                 reading and plotting only; never physics
+  kirkwood_io.py
+scripts/                driver scripts for unattended runs
+  run_one.sh            one run, with resume, watchdog and slicing
+  sweep.sh              a budgeted queue of runs
+  ae_evolution.py       the animations above
+analysis.ipynb          the analysis, top to bottom
+```
+
+`cpp/` and `cuda/` are deliberately not shared beyond the headers listed above.
+The CPU integrator is the reference the GPU one is checked against, and keeping
+them independent is what makes that check mean anything.
+
+## Building
+
+Needs a C++23 compiler, OpenMP, and optionally a CUDA toolkit. The CUDA targets
+are guarded, so a machine without one still configures and builds the CPU
+target.
+
+```sh
+cmake -S . -B build-o3 -DCMAKE_BUILD_TYPE=Release
+cmake --build build-o3 -j
+```
+
+`CMAKE_CUDA_ARCHITECTURES` is pinned to `89` (Ada); change it in
+`CMakeLists.txt` for a different card. Pinning embeds no PTX and keeps the build
+fast at the cost of running only on that architecture.
+
+## Running
+
+Both binaries take the same arguments, so a run is reproduced by re-issuing its
+command line against either:
+
+```sh
+./build-o3/kirkwood     <n_particles> <n_steps> [dump_dir] [epoch_every] \
+                        [e_max] [saturn] [seed] [eccentric]
+./build-o3/kirkwood_gpu <same>
+```
+
+Prefix a benchmark with `""` as `dump_dir`: the dumps share the wall clock with
+the integration, so otherwise a timing run measures the disk.
+
+For an unattended run, use the driver rather than the binary:
+
+```sh
+# one run, resumable, with a watchdog
+nohup bash scripts/run_one.sh > data/run/driver.out 2>&1 &
+
+# a queue of configurations, stopping when the time budget runs out
+nohup bash scripts/sweep.sh > data/sweep/driver.out 2>&1 &
+```
+
+Both resume from the newest epoch file in the output directory, so a run
+interrupted by a crash, a reboot or a slice boundary continues where it left
+off. A run split this way produces output bit-identical to an uninterrupted one.
+
+## Performance
+
+Measured on the machine this was developed on, 10⁶ particles:
+
+| | ns per particle per step |
+|---|---|
+| CPU, 4 OpenMP threads | 18.6 |
+| GPU | 0.83 |
+
+The GPU port is one thread per particle for a whole outer step, with the
+accumulator in a register and no barrier anywhere, and it passes the perturbers'
+positions as a `BodyTable` by value so no device copy lands in the inner loop.
+The force is computed in single precision: Nsight Compute put the FP64 pipeline
+at 86.8 % with the issue slots at 2.3 %, and moving the force off that pipe was
+worth 1.80×. Per-particle |Δa| after 10⁵ years rises from 1 × 10⁻¹⁴ to
+5 × 10⁻⁴ AU as a result, which is 2 % of the 0.025 AU gap width; the quantity
+actually measured is a density, and the difference is 30× smaller than the signal
+in the worst bin.
+
+The machines' own rates matter to two scripts — `scripts/run_one.sh` sets its
+watchdog threshold from a measured pace, and `scripts/sweep.sh` decides what fits
+in a budget from a rate table — and both say so where they are set.
+
+## What is not done
+
+- **Removal is not implemented on the GPU.** It does not need to be, per the
+  argument above, but the argument rests on the particles being non-interacting
+  and would fail the moment the disk is given self-gravity.
+- **`dt` is a compile-time constant** in `cpp/physics.hpp`. Lowering it to 2 days
+  for a convergence check costs five times the steps for the same physical time;
+  the resulting run covers 0.02 Myr against the 10-day run's 0.30, which is short
+  of the 3–7 × 10⁴ years over which the structures plateau. Whether the
+  eccentricity ceiling at e ≈ 0.65 is physical or numerical is therefore **not
+  settled**. It is suspicious: the 3:1 and the 5:2 differ in semimajor axis by
+  13 % but both stop at a perihelion near 0.9 AU, and a physical ceiling should
+  move with `a`.
+- **The perturbers' mutual gravity is ignored.** Jupiter and Saturn do not pull
+  on each other here, so their orbits are fixed Kepler ellipses and `g₅` and `g₆`
+  do not drift. Real secular resonance structure depends on those frequencies.
+- **The disk is coplanar.** Real asteroids have inclinations, the ν₁₆ resonance
+  needs them, and Kozai can lower a perihelion without raising `e`.
+- `python/kirkwood_plot.py` is no longer used; `analysis.ipynb` draws with
+  matplotlib directly.
