@@ -17,23 +17,34 @@
 // is to draw them from one function.
 
 // A Kirkwood gap sits at a fixed fraction of the perturber's axis -- 2.50 AU is
-// the 3:1 of 5.203 -- so a planet placed anywhere else puts every resonance
-// outside the test-particle disk and no gap can form there at all.
-inline constexpr double JUPITER_A_AU = 5.203;
-inline constexpr double SATURN_A_AU = 9.537;
+// the 3:1 of 5.20 -- so a planet placed anywhere else puts every resonance
+// outside the test-particle disk and no gap can form there at all. The axes and
+// eccentricities come from ph, which cites them.
+inline constexpr double JUPITER_A_AU = ph::A_JUPITER_AU;
+inline constexpr double SATURN_A_AU = ph::A_SATURN_AU;
 
-// A circular orbit in the heliocentric frame, starting on the +x axis.
-// Args:
+// A body on an orbit of the given elements, placed at perihelion on the +x axis
+// with its velocity along +y.
+//
+// Eccentricity matters here and is not a refinement. A circular perturber's
+// perihelion does not precess, so there is no g5 or g6 secular frequency, so
+// the nu5 and nu6 resonances -- which are what make the 3:1, 4:1, 5:2 and 7:3
+// commensurabilities chaotic -- are absent. See ph::E_JUPITER.
+//
+// Arg:
 //   mass: body mass in solar masses.
-//   a_au: orbital radius in AU.
+//   a_au: semimajor axis in AU; must be > 0.
+//   e: eccentricity; must satisfy 0 <= e < 1.
 // Returns:
 //   The body, with its acceleration left at zero -- the simulation computes it.
-inline Planet circular_body(double mass, double a_au)
+inline Planet body_at_perihelion(double mass, double a_au, double e)
 {
     Planet body;
     body.mass = mass;
-    body.r = Vec3{a_au, 0.0, 0.0};
-    body.v = Vec3{0.0, std::sqrt(ph::G * ph::M_Sun / a_au), 0.0};
+    body.r = Vec3{a_au * (1.0 - e), 0.0, 0.0};
+    body.v = Vec3{0.0,
+                  std::sqrt(ph::G * ph::M_Sun / a_au * (1.0 + e) / (1.0 - e)),
+                  0.0};
     body.a = Vec3{0.0, 0.0, 0.0};
     return body;
 }
@@ -65,18 +76,28 @@ inline void sun_only_acceleration(std::vector<Planet> &planets)
 // The massive bodies of the restricted problem.
 //
 // Their acceleration is Sun-only, so Jupiter and Saturn do not pull on each
-// other here. That is enough for a secular resonance: the test particles feel
-// every body, so nu6 is present in their dynamics.
+// other here. The test particles feel every body, but with circular orbits that
+// is not enough for the secular resonances the gaps are attributed to: nu5 and
+// nu6 exist because the planetary perihelia precess, and a circular orbit's
+// perihelion does not. Pass eccentric = true for the model the literature
+// actually uses.
 //
 // Args:
-//   with_saturn: add Saturn at 9.537 AU.
+//   with_saturn: add Saturn.
+//   eccentric: use the real eccentricities from ph. False reproduces the
+//     circular runs this project started with, which are worth keeping as a
+//     control -- they are the model that does NOT produce the higher-order
+//     gaps.
 // Returns:
 //   Jupiter, and Saturn if asked for, with their accelerations already set.
-inline std::vector<Planet> make_planets(bool with_saturn)
+inline std::vector<Planet> make_planets(bool with_saturn, bool eccentric)
 {
-    std::vector<Planet> planets{circular_body(ph::M_Jupiter, JUPITER_A_AU)};
+    const double ej = eccentric ? ph::E_JUPITER : 0.0;
+    const double es = eccentric ? ph::E_SATURN : 0.0;
+    std::vector<Planet> planets{
+        body_at_perihelion(ph::M_Jupiter, JUPITER_A_AU, ej)};
     if (with_saturn)
-        planets.push_back(circular_body(ph::M_Saturn, SATURN_A_AU));
+        planets.push_back(body_at_perihelion(ph::M_Saturn, SATURN_A_AU, es));
     sun_only_acceleration(planets);
     return planets;
 }

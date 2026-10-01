@@ -23,21 +23,28 @@ struct Args
     double e_max = 0.1;
     bool with_saturn = false;
     std::uint64_t seed = 114514;
+
+    // Give the perturbers their real eccentricities. False keeps them circular,
+    // which was this project's first model and produces none of the
+    // higher-order gaps: without precessing perihelia there is no nu5 or nu6.
+    bool eccentric = false;
 };
 
 inline void print_usage(const char *argv0)
 {
     std::cerr << "usage: " << argv0
               << " <n_particles> <n_steps> [dump_dir] [epoch_every] "
-                 "[e_max] [saturn] [seed]\n"
+                 "[e_max] [saturn] [seed] [eccentric]\n"
               << "  dump_dir     defaults to 'data'; \"\" skips the dumps, "
                  "which is what a timing run wants.\n"
               << "  epoch_every  steps between dumps; 0 targets ~100 epochs, "
                  "which is the default.\n"
               << "  e_max        upper bound of the initial eccentricity, "
                  "default 0.1.\n"
-              << "  saturn       1 adds Saturn at 9.537 AU, default 0.\n"
-              << "  seed         default 114514.\n";
+              << "  saturn       1 adds Saturn, default 0.\n"
+              << "  seed         default 114514.\n"
+              << "  eccentric    1 gives the perturbers their real "
+                 "eccentricities, default 0.\n";
 }
 
 // Args:
@@ -60,6 +67,7 @@ inline Args parse_args(int argc, char **argv)
     a.e_max = (argc > 5) ? std::stod(argv[5]) : 0.1;
     a.with_saturn = (argc > 6) && std::stoi(argv[6]) != 0;
     a.seed = (argc > 7) ? std::stoull(argv[7]) : 114514;
+    a.eccentric = (argc > 8) && std::stoi(argv[8]) != 0;
 
     const std::uint64_t requested = (argc > 4) ? std::stoull(argv[4]) : 0;
     a.epoch_every = requested > 0
@@ -80,6 +88,7 @@ inline void print_summary(const char *backend, const Args &a, double seconds,
               << " n_step=" << a.n_step
               << " e_max=" << a.e_max
               << " saturn=" << (a.with_saturn ? 1 : 0)
+              << " eccentric=" << (a.eccentric ? 1 : 0)
               << " seed=" << a.seed
               << " threads=" << threads
               << " seconds=" << seconds

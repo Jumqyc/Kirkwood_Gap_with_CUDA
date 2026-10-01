@@ -26,7 +26,7 @@ static int run_backend(const Args &a)
     if (!a.dump_dir.empty())
         std::filesystem::create_directories(a.dump_dir);
 
-    std::vector<Planet> planets = make_planets(a.with_saturn);
+    std::vector<Planet> planets = make_planets(a.with_saturn, a.eccentric);
     Particles particles(a.n_particle);
 
     std::uint64_t start_step = 0;

@@ -37,4 +37,18 @@ constexpr double REMOVE_BELOW_AU = 1.524;
 // needs the array bound. Going over is a thrown error, never a silent
 // truncation.
 constexpr std::size_t MAX_BODIES = 5;
+
+// The giant planets' orbits: semimajor axis in AU and eccentricity,
+// dimensionless. J2000 mean elements, from the JPL planetary fact sheet
+// (https://nssdc.gsfc.nasa.gov/planetary/factsheet/), rounded to four decimals.
+//
+// The eccentricities are not decoration. A circular perturber has a fixed
+// perihelion, so its secular forcing has no g5 or g6 frequency, so the nu5 and
+// nu6 secular resonances do not exist -- and those are what make the 3:1, 4:1,
+// 5:2 and 7:3 commensurabilities chaotic (Morbidelli & Moons 1993; Moons &
+// Morbidelli 1995). Runs without them study a different problem.
+constexpr double A_JUPITER_AU = 5.2028;
+constexpr double E_JUPITER = 0.0489;
+constexpr double A_SATURN_AU = 9.5388;
+constexpr double E_SATURN = 0.0565;
 } // namespace ph
