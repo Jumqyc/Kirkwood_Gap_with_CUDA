@@ -40,7 +40,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "python"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from kirkwood_io import elements, read_epoch, resonance_axes, semimajor_axis  # noqa: E402
+from kirkwood_io import (elements, epoch_header, read_epoch,  # noqa: E402
+                         resonance_axes, semimajor_axis)
 from render_frames import render, epoch_paths, load_baseline  # noqa: E402
 
 DAYS_PER_YEAR = 365.25
@@ -125,7 +126,19 @@ def build_segment(seg: Segment, build: Path, work: Path, frames: int,
         if baseline is None:
             baseline = load_baseline(work / "baseline.npy", dumps)
 
-        pending = [p for p in epoch_paths(dumps) if not png_of(p).exists()]
+        # Only this segment's epochs. The dump directory is shared, so a restart
+        # finds the later segments' dumps sitting in it, and rendering those into
+        # this segment's frame directory is silent -- the frames look fine and
+        # are simply at the wrong times. Compared by step * dt_days, not by step:
+        # a step is dt days, so step numbers from different segments are not
+        # comparable and the ranges overlap.
+        def mine(path: Path) -> bool:
+            step, dt_days = epoch_header(path)
+            years = step * dt_days / DAYS_PER_YEAR
+            return seg.start_year - 1.0 <= years <= seg.end_year + 1.0
+
+        pending = [p for p in epoch_paths(dumps)
+                   if mine(p) and not png_of(p).exists()]
         if not pending:
             print("    (nothing new to render)")
             continue

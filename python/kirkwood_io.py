@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+import struct
+
 import numpy as np
 import numpy.typing as npt
 
@@ -71,6 +73,32 @@ class Epoch:
     def time_years(self) -> float:
         """Simulated time since the start of the run, in years."""
         return self.step * self.dt_days / 365.0
+
+
+# magic, version, n_planet, dt_days, G, n_alive, step.
+_HEADER = struct.Struct("<IIQddQQ")
+
+
+def epoch_header(path: str | Path) -> tuple[int, float]:
+    """Reads only the fixed-size header of an epoch file.
+
+    Args:
+        path: an epoch file written by write_epoch.
+    Returns:
+        (step, dt_days) -- the step count and the step size it is counted in.
+    Raises:
+        ValueError: if the magic or version does not match.
+
+    Cheap enough to call on every file in a directory: the header is a few dozen
+    bytes of a file that may be hundreds of megabytes. The step count alone is
+    not comparable across files, because a step is dt days; step * dt_days is.
+    """
+    with open(path, "rb") as f:
+        magic, version, n_planet, dt_days, _G, n_alive, step = _HEADER.unpack(
+            f.read(_HEADER.size))
+    if magic != 0x4B49524B or version != 1:
+        raise ValueError(f"{path}: not an epoch file (magic={magic:#x} version={version})")
+    return step, dt_days
 
 
 def read_epoch(path: str | Path) -> Epoch:
