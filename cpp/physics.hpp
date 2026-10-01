@@ -19,7 +19,7 @@ constexpr double M_Sun = 1;                         // Sun mass
 constexpr double M_Jupiter = 0.000954500308024994;  // Jupiter mass
 constexpr double M_Saturn = 0.00028564603527829116; // Saturn mass
 
-constexpr double dt = 10; // one time step in days
+constexpr double dt = 2; // one time step in days
 
 // G in units of AU^3 / (Msun * dt^2). The step size is folded in here, so every
 // quantity below is per *step*, not per day.
