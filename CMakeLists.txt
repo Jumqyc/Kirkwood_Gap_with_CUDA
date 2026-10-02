@@ -79,3 +79,7 @@ if(CMAKE_CUDA_COMPILER)
   # does not touch. The FP64 force was what actually mattered and it was fixed
   # by writing float in the source.
 endif()
+# Checks ph::kepler_drift against closed-form answers. No reference integrator
+# is involved, so it runs anywhere and needs no data.
+add_executable(test_kepler tests/test_kepler.cpp)
+target_compile_options(test_kepler PRIVATE -Wall -Wextra)
