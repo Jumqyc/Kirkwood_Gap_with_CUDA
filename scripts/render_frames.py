@@ -52,6 +52,10 @@ SEGMENT_EDGES = (10_000.0, 100_000.0)
 A_EDGES = np.arange(2.0, 3.51, 0.005)
 E_EDGES = np.arange(0.0, 0.72, 0.005)
 RATIO_EDGES = np.arange(2.0, 3.51, 0.01)
+# Coarser bins for the machine-readable copy. 150 bins resolve a resonance to
+# 0.01 AU, which is finer than the 0.025 AU window the depletion ratios use, and
+# one frame's worth is a few hundred bytes rather than a few hundred kilobytes.
+NPZ_EDGES = RATIO_EDGES
 ORDER = ["2:1", "3:1", "5:2", "7:3", "4:1"]
 
 
@@ -160,6 +164,28 @@ def render(path: Path, frames: Path, resonances: dict[str, float],
     out = frames / f"frame_{epoch.step:09d}.png"
     fig.savefig(out)
     plt.close(fig)
+
+    # The PNG is for a person; this is for whatever wants to measure rather than
+    # look. Reading a depletion ratio off a rendered image is good to about 10%,
+    # which is larger than several of the effects this project measures, and a
+    # run whose frames cannot be re-analysed has to be run again to ask a second
+    # question of it.
+    #
+    # Only the histograms, not the particle arrays: at 8e6 particles the raw a
+    # and e are 128 MB a frame, which over four thousand frames is a third of a
+    # terabyte, and the histograms are what the measurement actually uses.
+    np.savez_compressed(
+        out.with_suffix(".npz"),
+        step=np.int64(epoch.step),
+        dt_days=np.float64(epoch.dt_days),
+        time_years=np.float64(epoch.time_years),
+        n_particle=np.int64(len(a)),
+        count_vs_a=counts,
+        a_edges=RATIO_EDGES,
+        ae_hist=np.histogram2d(a, e, bins=[A_EDGES, E_EDGES])[0],
+        ae_a_edges=A_EDGES,
+        ae_e_edges=E_EDGES,
+    )
     return out
 
 
