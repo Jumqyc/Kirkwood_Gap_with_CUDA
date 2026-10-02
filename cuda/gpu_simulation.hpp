@@ -9,16 +9,12 @@
 #include "../cpp/physics.hpp"
 #include "../cpp/vec3.hpp"
 
-// Where every massive body is during every sub-step of one outer step, shaped
-// the way the kernel wants it.
+// Where every massive body is during each sub-step of one outer step, shaped the
+// way the kernel wants it.
 //
-// Passed to the kernel BY VALUE. It is a couple of hundred bytes, kernel
-// arguments travel with the launch, and that keeps a device copy out of the
-// inner loop -- a per-step cudaMemcpy of even 200 bytes costs more than the
-// arithmetic it feeds.
-//
-// Body 0 is the Sun, pinned at the origin, so its positions are all zero and
-// the kernel needs no special case for it.
+// Passed to the kernel by value: it is a couple of hundred bytes and kernel
+// arguments travel with the launch, which keeps a device copy out of the inner
+// loop. Body 0 is the Sun, pinned at the origin, so its positions stay zero.
 struct BodyTable
 {
     float pos[3][ph::MAX_BODIES][3] = {}; // [sub-step][body][x y z], in AU
@@ -33,12 +29,10 @@ struct BodyTable
 // version splits every step into a dozen OpenMP regions, this one puts a whole
 // outer step in one thread with no barrier anywhere.
 //
-// Owns nine cudaMalloc'd arrays. The copy operations are deleted on purpose:
-// the default copy would duplicate the nine pointers, and the two destructors
-// would then cudaFree the same block twice.
-//
-// Invariant: the device arrays always hold exactly n particles. Culling is not
-// implemented here, so n never changes; `step` counts outer steps taken.
+// Owns nine cudaMalloc'd arrays; the copy operations are deleted because the
+// default would duplicate the pointers and the two destructors would free the
+// same block twice. The device arrays always hold exactly n particles, and
+// `step` counts outer steps taken.
 class GpuSimulation
 {
 public:

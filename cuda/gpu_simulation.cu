@@ -38,36 +38,19 @@ constexpr double W0 = -1.7024143839193153;
 
 // Sums the acceleration of every massive body at one sub-step.
 //
-// The force is computed in SINGLE precision on purpose. Nsight Compute put the
-// FP64 pipeline at 86.8% with the issue slots at 2.3%: this kernel is bound by
-// the FP64 pipe, which on a consumer GPU runs at 1/64 the FP32 rate. Doing the
-// force in float moves it off that pipe entirely, and rsqrtf is one MUFU
-// instruction rather than the ~20 FP64 operations a double division expands
-// into. Measured 1.80x at 1e6 particles.
-//
-// What it costs: per-particle |da| after 1e5 years goes from 1e-14 to 5.2e-4
-// AU. That is 2% of the 0.025 AU gap width, which sounds alarming and is not:
-// what the project measures is a binned distribution, and the difference
-// between this and the double version is 30x smaller than the signal in the
-// worst bin (0.36% on the 2:1 depletion ratio). A future measurement wanting a
-// finer signal than that would have to re-examine this.
-//
-// Positions, velocities and the accumulator itself all stay double. Only the
-// arithmetic between them is float, and the body positions arrive as float so
-// the host converts them once rather than every thread converting them on every
-// call -- another 1.25x.
+// The arithmetic between the state and the accumulator is SINGLE precision:
+// this kernel is bound by the FP64 pipe, which on a consumer GPU runs at 1/64
+// the FP32 rate. Positions, velocities, the accumulator and mu stay double.
+// The force carries |da| ~ 5e-4 AU after 1e5 years, which is 2% of the 0.025 AU
+// window the depletion ratios use and 30x below the signal in the worst bin.
 //
 // Args:
 //   rx, ry, rz: this particle's position in AU, already narrowed to float.
 //   ax, ay, az: accumulator in AU/step^2; overwritten, not added to.
 //   bodies: where every massive body is, by sub-step.
-//   sub: which sub-step, 0..2.
-//   first: index of the first body to include. Body 0 is the Sun. The Yoshida-4
-//     scheme passes 0, because its drift is a straight line and the Sun's pull
-//     has to come from the kick. Wisdom-Holman passes 1: its drift is an exact
-//     Kepler advance about the Sun, so including the Sun here as well would
-//     count it twice -- which yields a smooth, plausible, wrong orbit rather
-//     than a crash.
+//   sub: which sub-step.
+//   first: index of the first body to include. Body 0 is the Sun; a scheme
+//     whose drift contains the Sun passes 1.
 // Returns:
 //   Nothing; the accumulator is written.
 __device__ inline void force(float rx, float ry, float rz,
@@ -76,10 +59,8 @@ __device__ inline void force(float rx, float ry, float rz,
 {
     ax = ay = az = 0.0;
 
-    // A run-time loop, unlike the CPU kernel's compile-time unrolling. The body
-    // count is the same for every thread, so the branch is uniform, and the
-    // unrolling buys little on a GPU. It also means adding a body costs a
-    // longer table rather than another switch case.
+    // A run-time loop: the body count is uniform across the block, and adding a
+    // body costs a longer table rather than another switch case.
     for (int b = first; b < bodies.nb; ++b)
     {
         const float px = bodies.pos[sub][b][0];
@@ -101,35 +82,24 @@ __device__ inline void force(float rx, float ry, float rz,
 
 // The two integration schemes, as compile-time types.
 //
-// A scheme is exactly three things, and nothing else goes in:
-//   * how many sub-steps it takes, and their coefficients
-//   * what the drift does
-//   * whether the kick includes the central body
-//
-// It is a template parameter rather than a run-time flag because SUBSTEPS has
-// to be a constant: with a run-time branch the loop cannot be unrolled and the
-// compiler cannot specialise away the body the kick skips. It also removes the
-// shape that produced the worst bug of this refactor's predecessor -- two
-// schemes sharing one function body, where a patch to one silently damaged the
-// other.
-//
-// What does NOT belong here: the SoA layout, the epoch format, the grid
-// calculation, the dump policy. None of them differ between schemes.
+// A scheme is three things: how many sub-steps it takes and their coefficients,
+// what the drift does, and whether the kick includes the central body. It is a
+// template parameter so that SUBSTEPS is a constant, which is what lets the
+// sub-step loop be unrolled and the skipped body be dropped.
 struct Yoshida4
 {
     static constexpr int SUBSTEPS = 3;
     static constexpr bool KICK_INCLUDES_SUN = true;
 
-    // The sub-step length as a multiple of dt. The middle one is negative: it
-    // integrates backwards, which is what cancels the h^3 term and buys the
-    // fourth order.
+    // Sub-step length as a multiple of dt. The middle one is negative, which is
+    // what cancels the h^3 term and buys the fourth order.
     __device__ static double weight(int sub)
     {
         return sub == 1 ? W0 : W1;
     }
 
-    // Straight-line drift. Args: r and v in AU and AU/step, mutated; w the
-    // sub-step length in steps; mu unused.
+    // Straight-line drift. Args: r and v in AU and AU/step, mutated; w in
+    // steps; mu unused.
     __device__ static void drift(double &rx, double &ry, double &rz,
                                  double &vx, double &vy, double &vz,
                                  double w, double)
@@ -142,9 +112,8 @@ struct Yoshida4
 
 struct WisdomHolman
 {
-    // One sub-step, not three. A Kepler drift is already exact, so the
-    // composition has nothing left to cancel and running three of them costs 3x
-    // for no accuracy. DKD -- kick, drift, kick -- is the standard mapping.
+    // One sub-step: a Kepler drift is already exact, so a composition has
+    // nothing to cancel. DKD -- kick, drift, kick -- is the standard mapping.
     static constexpr int SUBSTEPS = 1;
     static constexpr bool KICK_INCLUDES_SUN = false;
 
@@ -154,8 +123,7 @@ struct WisdomHolman
     }
 
     // Exact Kepler drift about the central body. Args: r and v in AU and
-    // AU/step, mutated; w the sub-step length in steps; mu = G*M_Sun in
-    // AU^3/step^2.
+    // AU/step, mutated; w in steps; mu = G*M_Sun in AU^3/step^2.
     __device__ static void drift(double &rx, double &ry, double &rz,
                                  double &vx, double &vy, double &vz,
                                  double w, double mu)
@@ -165,8 +133,7 @@ struct WisdomHolman
 };
 
 // Advances every test particle by one outer step, in the scheme's own number of
-// sub-steps. There is no barrier anywhere in this kernel and the acceleration
-// never touches memory, which is the shape the CPU version cannot take.
+// sub-steps. No barrier anywhere, and the acceleration stays in a register.
 //
 // Args:
 //   rx..az: device arrays of length n; positions in AU, velocities in AU per
@@ -194,10 +161,8 @@ __global__ void particle_step(double *rx, double *ry, double *rz,
 
     const int first = Scheme::KICK_INCLUDES_SUN ? 0 : 1;
 
-    // Each sub-step narrows the position once, right after its drift. Narrowing
-    // once per force() call instead, or worse hoisting it above the sub-steps,
-    // is silent: the force is then evaluated at a stale position and the physics
-    // is simply wrong (measured |da| ~ 1 AU, with no crash to warn you).
+    // The position is narrowed once per sub-step, right after its drift, so
+    // force() sees where the particle actually is.
     for (int sub = 0; sub < Scheme::SUBSTEPS; ++sub)
     {
         const double w = Scheme::weight(sub);

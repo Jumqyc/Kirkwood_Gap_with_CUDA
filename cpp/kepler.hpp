@@ -2,22 +2,13 @@
 
 // Exact two-body (Kepler) propagation, for the Wisdom-Holman drift.
 //
-// In a kick-drift-kick scheme the drift is where the accuracy is decided. The
-// leapfrog drift is a straight line, r += v*dt, which is wrong for a particle
-// in the Sun's gravity well and worst near perihelion -- it is what forces our
-// step size down to 20 days at e = 0.65. Replacing it with an exact Kepler
-// advance removes that limit and lets dt be set by how fast the PERTURBATION
-// changes instead.
+// Universal variables rather than the classical eccentric-anomaly form: those
+// need the eccentricity vector, which is degenerate as e -> 0, and our
+// particles are drawn with e uniform on [0, 0.1]. This form needs only r, v and
+// the Stumpff functions, and covers all conic sections.
 //
-// Universal variables, not the classical eccentric-anomaly form. The classical
-// route needs the eccentricity vector, which is degenerate as e -> 0; our
-// particles are drawn with e uniform on [0, 0.1], so e near zero is common and
-// dividing by it would produce NaN on the very first step. Universal variables
-// use only r, v and the Stumpff functions, and cover elliptic, parabolic and
-// hyperbolic orbits in one formulation.
-//
-// Everything is in the project's units: AU, and steps rather than days, so mu
-// carries G*dt^2 and a "time" argument is a number of steps.
+// Units are the project's: AU, and steps rather than days, so mu carries
+// G*dt^2 and a time argument counts steps.
 
 #include <cmath>
 
@@ -30,18 +21,11 @@
 namespace ph
 {
 
-// sin and cos together, and sinh and cosh together.
-//
-// Computing them separately is not twice the work but close to it: each one
-// does its own argument reduction, and each doubles as a software sequence of
-// a few dozen instructions on a consumer GPU, where FP64 runs at 1/64 the FP32
-// rate. The pairs share all of that. This matters here more than anywhere else
-// in the project, because the Stumpff functions are recomputed on every Newton
-// iteration.
+// sin and cos from one call, sinh and cosh from one exp.
 //
 // Args:
-//   x: the angle or argument, dimensionless.
-//   s, c: written with sin(x) and cos(x), or with sinh(x) and cosh(x).
+//   x: angle or argument, dimensionless.
+//   s, c: written with sin(x) and cos(x), or sinh(x) and cosh(x).
 // Returns:
 //   Nothing.
 PH_HD inline void sin_cos(double x, double &s, double &c)
@@ -90,8 +74,8 @@ PH_HD inline void stumpff(double psi, double &c2, double &c3)
     }
     else
     {
-        // Series about zero. The closed forms lose all their significant
-        // digits here: both numerators vanish like psi^2.
+        // Series about zero: the closed forms above lose all their significant
+        // digits here, both numerators vanishing like psi^2.
         c2 = 0.5 - psi / 24.0 + psi * psi / 720.0;
         c3 = 1.0 / 6.0 - psi / 120.0 + psi * psi / 5040.0;
     }
@@ -99,10 +83,8 @@ PH_HD inline void stumpff(double psi, double &c2, double &c3)
 
 // Advances one particle along its exact Kepler orbit about the origin.
 //
-// The particle is one of many and feels only the central body here; the other
-// bodies are the perturbation and belong to the kick, not the drift. Passing
-// them in as well would double-count the central body, which produces a
-// plausible-looking orbit that is simply a different one.
+// Only the central body acts here. The other bodies are the perturbation and
+// belong to the kick.
 //
 // Args:
 //   rx, ry, rz: position in AU; overwritten with the position after dt.
@@ -111,9 +93,6 @@ PH_HD inline void stumpff(double psi, double &c2, double &c3)
 //   dt: time to advance, in steps. May be negative, which retraces the orbit.
 // Returns:
 //   Nothing.
-// Throws:
-//   Nothing. Callers that need to know about unbound orbits should check the
-//   specific orbital energy themselves.
 PH_HD inline void kepler_drift(double &rx, double &ry, double &rz,
                                double &vx, double &vy, double &vz,
                                double mu, double dt)
@@ -126,11 +105,8 @@ PH_HD inline void kepler_drift(double &rx, double &ry, double &rz,
     const double alpha = 2.0 / r0 - v2 / mu; // 1/a, in 1/AU
     const double sigma0 = rv / sqrt_mu;      // dimensionless
 
-    // Newton iteration on the universal anomaly chi. The starting guess is
-    // Vallado's; for an ellipse it is within a few percent and three or four
-    // steps converge. The count is fixed rather than convergence-tested
-    // because a data-dependent loop diverges across a warp on the GPU, where
-    // one thread needing an extra pass costs the whole warp that pass.
+    // Newton iteration on the universal anomaly chi, from Vallado's starting
+    // guess. The exit is a convergence test, not a fixed count.
     double chi = sqrt_mu * std::abs(alpha) * dt;
     if (alpha > 0.0)
         chi = sqrt_mu * alpha * dt;
@@ -145,10 +121,7 @@ PH_HD inline void kepler_drift(double &rx, double &ry, double &rz,
         const double f = sigma0 * chi * chi * c2
                          + (1.0 - alpha * r0) * chi * chi * chi * c3
                          + r0 * chi - sqrt_mu * dt;
-        // dF/dchi is r(chi) itself -- the standard identity, and the reason r is
-        // computed here rather than only after convergence. Writing out the
-        // derivative by hand instead gets one term wrong in a way that still
-        // converges to about 1e-8, which is small enough to look like rounding.
+        // dF/dchi is r(chi): the standard identity.
         const double step = f / r;
         chi -= step;
         if (std::fabs(step) < 1e-13 * (1.0 + std::fabs(chi)))
