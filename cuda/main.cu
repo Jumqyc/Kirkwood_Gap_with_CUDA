@@ -22,7 +22,7 @@
 // a wrapper script able to restart a multi-hour run after a crash -- re-issuing
 // the same command is the whole recovery procedure. Delete the directory (or
 // point dump_dir elsewhere) to start fresh, and note that the resumption is
-// always announced on stdout, never silent.
+// announced on stdout.
 static int run_backend(const Args &a)
 {
     if (!a.dump_dir.empty())

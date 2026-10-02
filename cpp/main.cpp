@@ -18,7 +18,7 @@
 // run continues from the newest one instead of starting over. Same rule as the
 // GPU build, so a driver script that restarts on failure works against either.
 // Delete the directory (or point dump_dir elsewhere) to start fresh; the
-// resumption is always announced on stdout, never silent.
+// resumption is announced on stdout.
 static int run_backend(const Args &a)
 {
     // The dumps share the wall clock with the integration below, so a timing
