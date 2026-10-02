@@ -30,9 +30,9 @@
 // The orbital-element formulas cancel the step unit, so a reader never has to
 // convert to days.
 //
-// The state may be float or double in memory -- the GPU keeps positions and
-// velocities as float -- but the file is always f64, so the reader has one case
-// to handle and a float build cannot silently change the format.
+// write_epoch is templated on the element type so a float build can call it,
+// but the file is always f64: the reader has one case, and the format does not
+// depend on how a build stores its state.
 //
 // Args:
 //   path: output file path; its parent directory must already exist.
@@ -45,10 +45,9 @@
 //   Nothing. Creates or truncates the file; it never appends, so one file holds
 //   exactly one epoch.
 // Throws:
-//   std::runtime_error if the file cannot be opened, or if any write or the
-//   final flush fails. ofstream sets failbit rather than throwing, and a short
-//   write leaves a file the reader misreads as a smaller epoch -- so the check
-//   is required, not defensive.
+//   std::runtime_error if the file cannot be opened or if any write or the
+//   final flush fails. ofstream sets failbit rather than throwing, so the check
+//   is required.
 template <typename T>
 void write_epoch(const std::string &path, std::uint64_t step,
                  const std::vector<Planet> &planets, std::size_t n_alive,
@@ -95,20 +94,16 @@ void write_epoch(const std::string &path, std::uint64_t step,
         put(tmp.data(), tmp.size());
     }
 
-    // failbit is sticky, so this one check after the flush covers every write
-    // above. The destructor would otherwise swallow the error and leave a
-    // truncated file with a zero exit status.
+    // failbit is sticky, so one check after the flush covers every write above.
     f.close();
     if (!f)
         throw std::runtime_error("write_epoch: write failed for " + path);
 }
 
-// The state one epoch file describes. Mirrors Epoch in python/kirkwood_io.py,
-// which is the other reader of the same bytes.
+// The state one epoch file describes. Mirrors Epoch in python/kirkwood_io.py.
 //
-// Note what is NOT here: the acceleration. It is a function of the positions,
-// so a resumed run recomputes it rather than storing it -- which is also why
-// the file format did not have to change to support resuming.
+// No acceleration: it is a function of the positions, so a resumed run refills
+// it rather than storing it.
 struct EpochState
 {
     std::uint64_t step = 0; // steps already taken, in units of the FILE's dt
@@ -122,15 +117,12 @@ struct EpochState
 // Args:
 //   path: an epoch file written by write_epoch().
 // Returns:
-//   The state it holds. Positions in AU, velocities in AU per step of THIS
-//   build's dt -- read_epoch converts them if the file used another one.
-//   carry zero mass, because the format does not store it -- the caller knows
-//   what it put in and keeps its own copy.
+//   The state it holds. Positions in AU and velocities in AU per step of THIS
+//   build's dt; read_epoch converts them if the file was written with another.
+//   The bodies carry zero mass, which the caller replaces from its own setup.
 // Throws:
 //   std::runtime_error if the file cannot be opened, is shorter than its header
-//   claims, or carries a magic or version this build does not know. A truncated
-//   file is the expected aftermath of a hard kill, and reading it as a valid
-//   shorter epoch would corrupt a resumed run silently.
+//   claims, or carries a magic or version this build does not know.
 inline EpochState read_epoch(const std::string &path)
 {
     std::ifstream f(path, std::ios::binary);
@@ -175,26 +167,21 @@ inline EpochState read_epoch(const std::string &path)
         get(block->data(), block->size() * sizeof(double));
     }
 
-    // A short read sets failbit, which is how a file cut off mid-write gets
-    // caught here instead of being accepted as a smaller epoch.
+    // A short read sets failbit, which is how a file cut off mid-write is
+    // caught rather than accepted as a smaller epoch.
     if (!f)
         throw std::runtime_error("read_epoch: truncated or short: " + path);
 
-    // Velocities are in AU per step, and a step is dt days -- so the same number
-    // means a different speed in a build with a different dt, by exactly
-    // dt_this_build / dt_file, NOT the other way round -- a velocity is AU per step,
-    // so going to a longer step multiplies it. Resuming without this is silent: the
-    // dt = 2 binary reading a dt = 10 file would run everything at a fifth of its
-    // speed and the orbit would simply be wrong. Accelerations are not stored,
-    // and the semimajor axis is derived from the state, so the velocities are the
-    // only thing that has to move.
+    // Velocities are in AU per step, and a step is dt days, so the same number
+    // means a different speed in a build with a different dt: the factor is
+    // dt_this_build / dt_file, and a longer step multiplies the velocity. The
+    // step count is in the same unit and needs the same conversion, or the
+    // resumed run's clock jumps by it. Accelerations are not stored and the
+    // semimajor axis is derived, so the velocities and the step are all that
+    // move.
     const double to_this_step = ph::dt / s.dt_days;
     if (to_this_step != 1.0)
     {
-        // The step count is in the same unit and needs the same conversion, or
-        // the resumed run's clock jumps: 2000 steps of 2 days is 11 years, and
-        // read as 2000 steps of 10 days it becomes 55. The dynamics are fine
-        // either way, but every time the run reports would be wrong.
         s.step = static_cast<std::uint64_t>(
             static_cast<double>(s.step) / to_this_step + 0.5);
         for (std::vector<double> *block : {&s.vx, &s.vy, &s.vz})
