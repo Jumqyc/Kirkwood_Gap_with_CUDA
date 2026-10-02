@@ -56,10 +56,13 @@ if(CMAKE_CUDA_COMPILER)
   # and removes the chance of that rescaling being forgotten.
   #
   #   kirkwood_gpu         dt = 10 days, what the README's results used
-  #   kirkwood_gpu_dt0p5   dt = 0.5, for the first 1 000 years of the video
-  #   kirkwood_gpu_dt2     dt = 2,   for the next 9 000
-  #   kirkwood_gpu_dt20    dt = 20,  for the last 900 000, where nothing changes
-  foreach(kirkwood_dt 10 0.5 2 20)
+  #   kirkwood_gpu_dt0p5   dt = 0.5, video with Yoshida-4
+  #   kirkwood_gpu_dt2     dt = 2
+  #   kirkwood_gpu_dt20    dt = 20
+  #   kirkwood_gpu_dt5     dt = 5,   video with Wisdom-Holman, which takes
+  #   kirkwood_gpu_dt100   dt = 100, steps about ten times larger for the same
+  #   kirkwood_gpu_dt200   dt = 200, accuracy -- 200 days is T_Jupiter / 20
+  foreach(kirkwood_dt 10 0.5 2 5 20 100 200)
     if(kirkwood_dt EQUAL 10)
       set(kirkwood_target kirkwood_gpu)
     else()
