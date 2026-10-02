@@ -7,6 +7,7 @@
 #include "gpu_simulation.hpp"
 
 #include "../cpp/epoch_file.hpp"
+#include "../cpp/kepler.hpp"
 #include "../cpp/physics.hpp"
 #include "../cpp/setup.hpp"
 
@@ -61,11 +62,17 @@ constexpr double W0 = -1.7024143839193153;
 //   ax, ay, az: accumulator in AU/step^2; overwritten, not added to.
 //   bodies: where every massive body is, by sub-step.
 //   sub: which sub-step, 0..2.
+//   first: index of the first body to include. Body 0 is the Sun. The Yoshida-4
+//     scheme passes 0, because its drift is a straight line and the Sun's pull
+//     has to come from the kick. Wisdom-Holman passes 1: its drift is an exact
+//     Kepler advance about the Sun, so including the Sun here as well would
+//     count it twice -- which yields a smooth, plausible, wrong orbit rather
+//     than a crash.
 // Returns:
 //   Nothing; the accumulator is written.
 __device__ inline void force(float rx, float ry, float rz,
                              double &ax, double &ay, double &az,
-                             const BodyTable &bodies, int sub)
+                             const BodyTable &bodies, int sub, int first)
 {
     ax = ay = az = 0.0;
 
@@ -73,7 +80,7 @@ __device__ inline void force(float rx, float ry, float rz,
     // count is the same for every thread, so the branch is uniform, and the
     // unrolling buys little on a GPU. It also means adding a body costs a
     // longer table rather than another switch case.
-    for (int b = 0; b < bodies.nb; ++b)
+    for (int b = first; b < bodies.nb; ++b)
     {
         const float px = bodies.pos[sub][b][0];
         const float py = bodies.pos[sub][b][1];
@@ -111,7 +118,7 @@ __device__ inline void force(float rx, float ry, float rz,
 __global__ void particle_step(double *rx, double *ry, double *rz,
                               double *vx, double *vy, double *vz,
                               double *ax, double *ay, double *az, int n,
-                              BodyTable bodies)
+                              BodyTable bodies, bool wh, double mu_sun)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n)
@@ -121,47 +128,77 @@ __global__ void particle_step(double *rx, double *ry, double *rz,
     double vxs = vx[i], vys = vy[i], vzs = vz[i];
     double axs = ax[i], ays = ay[i], azs = az[i];
 
-    // Each sub-step narrows the position once, right after its drift. Narrowing
-    // once per force() call instead, or worse hoisting it above the sub-steps,
-    // is silent: the force is then evaluated at a stale position and the
-    // physics is simply wrong (measured |da| ~ 1 AU, with no crash to warn you).
+    // `wh` is the same for every thread, so this branch is uniform and costs
+    // almost nothing; templating the kernel on it would buy nothing measurable.
+    //
+    // The two schemes do not take the same number of sub-steps, and that is not
+    // an implementation detail. Yoshida-4 needs three, because its drift is a
+    // straight line and the composition is what cancels the h^3 term. A
+    // Wisdom-Holman drift is already exact, so there is nothing left to cancel:
+    // running three Kepler solves per step costs 3x for no accuracy gain, which
+    // is what the first version of this did. DKD -- kick, drift, kick -- is the
+    // standard Wisdom-Holman mapping.
+    if (wh)
+    {
+        // Opening half-kick, using the perturbation acceleration left by the
+        // previous step. first_body = 1: the Sun is in the drift, not here.
+        vxs += 0.5 * axs;
+        vys += 0.5 * ays;
+        vzs += 0.5 * azs;
 
-    // Sub-step 1, coefficient W1.
-    vxs += 0.5 * W1 * axs;
-    vys += 0.5 * W1 * ays;
-    vzs += 0.5 * W1 * azs;
-    rxs += W1 * vxs;
-    rys += W1 * vys;
-    rzs += W1 * vzs;
-    force((float)rxs, (float)rys, (float)rzs, axs, ays, azs, bodies, 0);
-    vxs += 0.5 * W1 * axs;
-    vys += 0.5 * W1 * ays;
-    vzs += 0.5 * W1 * azs;
+        ph::kepler_drift(rxs, rys, rzs, vxs, vys, vzs, mu_sun, 1.0);
 
-    // Sub-step 2, coefficient W0. It is negative: the middle sub-step
-    // integrates backwards, which is what cancels the h^3 error term.
-    vxs += 0.5 * W0 * axs;
-    vys += 0.5 * W0 * ays;
-    vzs += 0.5 * W0 * azs;
-    rxs += W0 * vxs;
-    rys += W0 * vys;
-    rzs += W0 * vzs;
-    force((float)rxs, (float)rys, (float)rzs, axs, ays, azs, bodies, 1);
-    vxs += 0.5 * W0 * axs;
-    vys += 0.5 * W0 * ays;
-    vzs += 0.5 * W0 * azs;
+        force((float)rxs, (float)rys, (float)rzs, axs, ays, azs, bodies, 0, 1);
 
-    // Sub-step 3, coefficient W1 again.
-    vxs += 0.5 * W1 * axs;
-    vys += 0.5 * W1 * ays;
-    vzs += 0.5 * W1 * azs;
-    rxs += W1 * vxs;
-    rys += W1 * vys;
-    rzs += W1 * vzs;
-    force((float)rxs, (float)rys, (float)rzs, axs, ays, azs, bodies, 2);
-    vxs += 0.5 * W1 * axs;
-    vys += 0.5 * W1 * ays;
-    vzs += 0.5 * W1 * azs;
+        vxs += 0.5 * axs;
+        vys += 0.5 * ays;
+        vzs += 0.5 * azs;
+    }
+    else
+    {
+        // Each sub-step narrows the position once, right after its drift.
+        // Narrowing once per force() call instead, or worse hoisting it above
+        // the sub-steps, is silent: the force is then evaluated at a stale
+        // position and the physics is simply wrong (measured |da| ~ 1 AU, with
+        // no crash to warn you).
+
+        // Sub-step 1, coefficient W1.
+        vxs += 0.5 * W1 * axs;
+        vys += 0.5 * W1 * ays;
+        vzs += 0.5 * W1 * azs;
+        rxs += W1 * vxs;
+        rys += W1 * vys;
+        rzs += W1 * vzs;
+        force((float)rxs, (float)rys, (float)rzs, axs, ays, azs, bodies, 0, 0);
+        vxs += 0.5 * W1 * axs;
+        vys += 0.5 * W1 * ays;
+        vzs += 0.5 * W1 * azs;
+
+        // Sub-step 2, coefficient W0. It is negative: the middle sub-step
+        // integrates backwards, which is what cancels the h^3 error term.
+        vxs += 0.5 * W0 * axs;
+        vys += 0.5 * W0 * ays;
+        vzs += 0.5 * W0 * azs;
+        rxs += W0 * vxs;
+        rys += W0 * vys;
+        rzs += W0 * vzs;
+        force((float)rxs, (float)rys, (float)rzs, axs, ays, azs, bodies, 1, 0);
+        vxs += 0.5 * W0 * axs;
+        vys += 0.5 * W0 * ays;
+        vzs += 0.5 * W0 * azs;
+
+        // Sub-step 3, coefficient W1 again.
+        vxs += 0.5 * W1 * axs;
+        vys += 0.5 * W1 * ays;
+        vzs += 0.5 * W1 * azs;
+        rxs += W1 * vxs;
+        rys += W1 * vys;
+        rzs += W1 * vzs;
+        force((float)rxs, (float)rys, (float)rzs, axs, ays, azs, bodies, 2, 0);
+        vxs += 0.5 * W1 * axs;
+        vys += 0.5 * W1 * ays;
+        vzs += 0.5 * W1 * azs;
+    }
 
     rx[i] = rxs;
     ry[i] = rys;
@@ -187,14 +224,14 @@ __global__ void particle_step(double *rx, double *ry, double *rz,
 //   Nothing.
 __global__ void initial_accel(const double *rx, const double *ry,
                               const double *rz, double *ax, double *ay,
-                              double *az, int n, BodyTable bodies)
+                              double *az, int n, BodyTable bodies, bool wh)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n)
         return;
 
     force((float)rx[i], (float)ry[i], (float)rz[i], ax[i], ay[i], az[i],
-          bodies, 0);
+          bodies, 0, wh ? 1 : 0);
 }
 
 namespace
@@ -261,8 +298,22 @@ void record_positions(BodyTable &table, const std::vector<Planet> &planets,
 // Returns:
 //   Nothing.
 void advance_bodies(std::vector<Planet> &planets, double w, BodyTable &table,
-                    int sub)
+                    int sub, bool wh)
 {
+    if (wh)
+    {
+        // Wisdom-Holman: the bodies feel only the Sun, so their motion is an
+        // exact Kepler orbit and there is no kick to take. The three sub-step
+        // lengths sum to one, and composing exact drifts is exact, so advancing
+        // by W1, W0, W1 in turn lands the body on its true position -- the
+        // perturbers carry no integration error at all in this scheme.
+        const double mu_sun = ph::G * ph::M_Sun;
+        for (Planet &p : planets)
+            ph::kepler_drift(p.r.x, p.r.y, p.r.z, p.v.x, p.v.y, p.v.z, mu_sun, w);
+        record_positions(table, planets, sub);
+        return;
+    }
+
     for (Planet &p : planets)
     {
         p.v.x += 0.5 * w * p.a.x;
@@ -293,9 +344,10 @@ GpuSimulation::GpuSimulation(std::vector<Planet> planets, std::int64_t n,
                              const double *rx, const double *ry,
                              const double *rz, const double *vx,
                              const double *vy, const double *vz,
-                             std::uint64_t n_step, std::uint64_t start_step)
-    : planets_(std::move(planets)), n_(n), step_(start_step),
-      tot_step_(n_step)
+                             std::uint64_t n_step, std::uint64_t start_step,
+                             bool wisdom_holman)
+    : planets_(std::move(planets)), wisdom_holman_(wisdom_holman), n_(n),
+      step_(start_step), tot_step_(n_step)
 {
     const std::size_t bytes = static_cast<std::size_t>(n) * sizeof(double);
 
@@ -330,7 +382,8 @@ GpuSimulation::GpuSimulation(std::vector<Planet> planets, std::int64_t n,
         record_positions(at_zero, planets_, sub);
 
     initial_accel<<<grid_for(n), BLOCK>>>(rx_, ry_, rz_, ax_, ay_, az_,
-                                          static_cast<int>(n), at_zero);
+                                          static_cast<int>(n), at_zero,
+                                          wisdom_holman_);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 }
@@ -354,7 +407,8 @@ void GpuSimulation::launch(const BodyTable &bodies)
 {
     particle_step<<<grid_for(n_), BLOCK>>>(rx_, ry_, rz_, vx_, vy_, vz_, ax_,
                                            ay_, az_, static_cast<int>(n_),
-                                           bodies);
+                                           bodies, wisdom_holman_,
+                                           ph::G * ph::M_Sun);
 
     // A launch is asynchronous. The first check catches a launch that never
     // started; the second waits, so the next step and any copy see completed
@@ -392,9 +446,19 @@ void GpuSimulation::run(const std::string &dump_dir, std::uint64_t epoch_every)
         // the kernel a table of where they were.
         BodyTable bodies;
         fill_gm(bodies, planets_);
-        advance_bodies(planets_, W1, bodies, 0);
-        advance_bodies(planets_, W0, bodies, 1);
-        advance_bodies(planets_, W1, bodies, 2);
+        if (wisdom_holman_)
+        {
+            // DKD has one kick, so the table needs one sub-step: where the
+            // bodies are at the midpoint, which is where the kick acts. They
+            // feel only the Sun, so one exact drift by a whole step is exact.
+            advance_bodies(planets_, 1.0, bodies, 0, true);
+        }
+        else
+        {
+            advance_bodies(planets_, W1, bodies, 0, false);
+            advance_bodies(planets_, W0, bodies, 1, false);
+            advance_bodies(planets_, W1, bodies, 2, false);
+        }
 
         launch(bodies);
         step_ = s;

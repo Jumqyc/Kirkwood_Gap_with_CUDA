@@ -55,10 +55,17 @@ public:
     //   start_step: steps already taken before this object existed, i.e. the
     //     step number of the epoch the state came from. run() continues from
     //     start_step + 1.
+    //   wisdom_holman: integrate with the Wisdom-Holman mapping rather than the
+    //     Yoshida-4 leapfrog composition. The drift becomes an exact Kepler
+    //     advance about the Sun and the kick carries only the other bodies, so
+    //     the two are not interchangeable step for step -- WH takes far larger
+    //     steps for the same accuracy, and the two describe the same physics
+    //     from the same initial conditions only in the statistical sense.
     GpuSimulation(std::vector<Planet> planets, std::int64_t n,
                   const double *rx, const double *ry, const double *rz,
                   const double *vx, const double *vy, const double *vz,
-                  std::uint64_t n_step, std::uint64_t start_step = 0);
+                  std::uint64_t n_step, std::uint64_t start_step = 0,
+                  bool wisdom_holman = false);
     ~GpuSimulation();
 
     GpuSimulation(const GpuSimulation &) = delete;
@@ -101,6 +108,7 @@ private:
     // while these buffers are a cache on the way to the file, not state.
     mutable std::vector<double> h_rx_, h_ry_, h_rz_, h_vx_, h_vy_, h_vz_;
 
+    bool wisdom_holman_ = false;
     std::int64_t n_ = 0;
     std::uint64_t step_ = 0;     // outer steps taken so far
     std::uint64_t tot_step_ = 0; // outer steps to take in total

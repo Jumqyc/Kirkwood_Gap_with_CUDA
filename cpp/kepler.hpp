@@ -30,6 +30,38 @@
 namespace ph
 {
 
+// sin and cos together, and sinh and cosh together.
+//
+// Computing them separately is not twice the work but close to it: each one
+// does its own argument reduction, and each doubles as a software sequence of
+// a few dozen instructions on a consumer GPU, where FP64 runs at 1/64 the FP32
+// rate. The pairs share all of that. This matters here more than anywhere else
+// in the project, because the Stumpff functions are recomputed on every Newton
+// iteration.
+//
+// Args:
+//   x: the angle or argument, dimensionless.
+//   s, c: written with sin(x) and cos(x), or with sinh(x) and cosh(x).
+// Returns:
+//   Nothing.
+PH_HD inline void sin_cos(double x, double &s, double &c)
+{
+#ifdef __CUDACC__
+    ::sincos(x, &s, &c);
+#else
+    s = std::sin(x);
+    c = std::cos(x);
+#endif
+}
+
+PH_HD inline void sinh_cosh(double x, double &s, double &c)
+{
+    const double e = std::exp(x);
+    const double inv = 1.0 / e;
+    s = 0.5 * (e - inv);
+    c = 0.5 * (e + inv);
+}
+
 // The Stumpff functions c2 and c3, which stand in for (1-cos x)/x^2 and
 // (x-sin x)/x^3 and stay finite as psi -> 0 where those would not.
 //
@@ -43,14 +75,18 @@ PH_HD inline void stumpff(double psi, double &c2, double &c3)
     if (psi > 1e-6)
     {
         const double s = std::sqrt(psi);
-        c2 = (1.0 - std::cos(s)) / psi;
-        c3 = (s - std::sin(s)) / (psi * s);
+        double sn = 0.0, cs = 0.0;
+        sin_cos(s, sn, cs);
+        c2 = (1.0 - cs) / psi;
+        c3 = (s - sn) / (psi * s);
     }
     else if (psi < -1e-6)
     {
         const double s = std::sqrt(-psi);
-        c2 = (std::cosh(s) - 1.0) / (-psi);
-        c3 = (std::sinh(s) - s) / ((-psi) * s);
+        double sh = 0.0, ch = 0.0;
+        sinh_cosh(s, sh, ch);
+        c2 = (ch - 1.0) / (-psi);
+        c3 = (sh - s) / ((-psi) * s);
     }
     else
     {

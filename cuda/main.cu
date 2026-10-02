@@ -62,7 +62,8 @@ static int run_backend(const Args &a)
     }
 
     GpuSimulation s(planets, a.n_particle, rx.data(), ry.data(), rz.data(),
-                    vx.data(), vy.data(), vz.data(), a.n_step, start_step);
+                    vx.data(), vy.data(), vz.data(), a.n_step, start_step,
+                    a.wisdom_holman);
 
     const auto t0 = std::chrono::steady_clock::now();
     s.run(a.dump_dir, a.epoch_every);
