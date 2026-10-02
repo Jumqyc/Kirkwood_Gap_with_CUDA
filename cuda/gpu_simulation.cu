@@ -99,26 +99,90 @@ __device__ inline void force(float rx, float ry, float rz,
     }
 }
 
-// Advances every test particle by one outer step: the three KDK sub-steps of
-// the Yoshida composition, with the acceleration carried in a register
-// throughout. There is no barrier anywhere in this kernel and the acceleration
+// The two integration schemes, as compile-time types.
+//
+// A scheme is exactly three things, and nothing else goes in:
+//   * how many sub-steps it takes, and their coefficients
+//   * what the drift does
+//   * whether the kick includes the central body
+//
+// It is a template parameter rather than a run-time flag because SUBSTEPS has
+// to be a constant: with a run-time branch the loop cannot be unrolled and the
+// compiler cannot specialise away the body the kick skips. It also removes the
+// shape that produced the worst bug of this refactor's predecessor -- two
+// schemes sharing one function body, where a patch to one silently damaged the
+// other.
+//
+// What does NOT belong here: the SoA layout, the epoch format, the grid
+// calculation, the dump policy. None of them differ between schemes.
+struct Yoshida4
+{
+    static constexpr int SUBSTEPS = 3;
+    static constexpr bool KICK_INCLUDES_SUN = true;
+
+    // The sub-step length as a multiple of dt. The middle one is negative: it
+    // integrates backwards, which is what cancels the h^3 term and buys the
+    // fourth order.
+    __device__ static double weight(int sub)
+    {
+        return sub == 1 ? W0 : W1;
+    }
+
+    // Straight-line drift. Args: r and v in AU and AU/step, mutated; w the
+    // sub-step length in steps; mu unused.
+    __device__ static void drift(double &rx, double &ry, double &rz,
+                                 double &vx, double &vy, double &vz,
+                                 double w, double)
+    {
+        rx += w * vx;
+        ry += w * vy;
+        rz += w * vz;
+    }
+};
+
+struct WisdomHolman
+{
+    // One sub-step, not three. A Kepler drift is already exact, so the
+    // composition has nothing left to cancel and running three of them costs 3x
+    // for no accuracy. DKD -- kick, drift, kick -- is the standard mapping.
+    static constexpr int SUBSTEPS = 1;
+    static constexpr bool KICK_INCLUDES_SUN = false;
+
+    __device__ static double weight(int)
+    {
+        return 1.0;
+    }
+
+    // Exact Kepler drift about the central body. Args: r and v in AU and
+    // AU/step, mutated; w the sub-step length in steps; mu = G*M_Sun in
+    // AU^3/step^2.
+    __device__ static void drift(double &rx, double &ry, double &rz,
+                                 double &vx, double &vy, double &vz,
+                                 double w, double mu)
+    {
+        ph::kepler_drift(rx, ry, rz, vx, vy, vz, mu, w);
+    }
+};
+
+// Advances every test particle by one outer step, in the scheme's own number of
+// sub-steps. There is no barrier anywhere in this kernel and the acceleration
 // never touches memory, which is the shape the CPU version cannot take.
 //
 // Args:
-//   rx, ry, rz: device arrays of length n, positions in AU.
-//   vx, vy, vz: device arrays of length n, velocities in AU per step.
-//   ax, ay, az: device arrays of length n, acceleration in AU/step^2, as left by
-//     the previous step. Written back consistent with the new position.
+//   rx..az: device arrays of length n; positions in AU, velocities in AU per
+//     step, acceleration in AU/step^2 as left by the previous step.
 //   n: number of particles. Threads past the end return without writing.
-//   bodies: where every massive body is during each of the three sub-steps, in
-//     AU. By value: kernel arguments travel with the launch, so this costs no
-//     copy and nothing lands in the inner loop.
+//   bodies: where the massive bodies are during each sub-step, in AU. By value:
+//     kernel arguments travel with the launch, so this costs no copy.
+//   mu_sun: G * M_Sun in AU^3/step^2; used only by schemes whose drift is a
+//     Kepler advance.
 // Returns:
 //   Nothing; the nine arrays are updated in place.
+template <typename Scheme>
 __global__ void particle_step(double *rx, double *ry, double *rz,
                               double *vx, double *vy, double *vz,
                               double *ax, double *ay, double *az, int n,
-                              BodyTable bodies, bool wh, double mu_sun)
+                              BodyTable bodies, double mu_sun)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n)
@@ -128,76 +192,24 @@ __global__ void particle_step(double *rx, double *ry, double *rz,
     double vxs = vx[i], vys = vy[i], vzs = vz[i];
     double axs = ax[i], ays = ay[i], azs = az[i];
 
-    // `wh` is the same for every thread, so this branch is uniform and costs
-    // almost nothing; templating the kernel on it would buy nothing measurable.
-    //
-    // The two schemes do not take the same number of sub-steps, and that is not
-    // an implementation detail. Yoshida-4 needs three, because its drift is a
-    // straight line and the composition is what cancels the h^3 term. A
-    // Wisdom-Holman drift is already exact, so there is nothing left to cancel:
-    // running three Kepler solves per step costs 3x for no accuracy gain, which
-    // is what the first version of this did. DKD -- kick, drift, kick -- is the
-    // standard Wisdom-Holman mapping.
-    if (wh)
+    const int first = Scheme::KICK_INCLUDES_SUN ? 0 : 1;
+
+    // Each sub-step narrows the position once, right after its drift. Narrowing
+    // once per force() call instead, or worse hoisting it above the sub-steps,
+    // is silent: the force is then evaluated at a stale position and the physics
+    // is simply wrong (measured |da| ~ 1 AU, with no crash to warn you).
+    for (int sub = 0; sub < Scheme::SUBSTEPS; ++sub)
     {
-        // Opening half-kick, using the perturbation acceleration left by the
-        // previous step. first_body = 1: the Sun is in the drift, not here.
-        vxs += 0.5 * axs;
-        vys += 0.5 * ays;
-        vzs += 0.5 * azs;
-
-        ph::kepler_drift(rxs, rys, rzs, vxs, vys, vzs, mu_sun, 1.0);
-
-        force((float)rxs, (float)rys, (float)rzs, axs, ays, azs, bodies, 0, 1);
-
-        vxs += 0.5 * axs;
-        vys += 0.5 * ays;
-        vzs += 0.5 * azs;
-    }
-    else
-    {
-        // Each sub-step narrows the position once, right after its drift.
-        // Narrowing once per force() call instead, or worse hoisting it above
-        // the sub-steps, is silent: the force is then evaluated at a stale
-        // position and the physics is simply wrong (measured |da| ~ 1 AU, with
-        // no crash to warn you).
-
-        // Sub-step 1, coefficient W1.
-        vxs += 0.5 * W1 * axs;
-        vys += 0.5 * W1 * ays;
-        vzs += 0.5 * W1 * azs;
-        rxs += W1 * vxs;
-        rys += W1 * vys;
-        rzs += W1 * vzs;
-        force((float)rxs, (float)rys, (float)rzs, axs, ays, azs, bodies, 0, 0);
-        vxs += 0.5 * W1 * axs;
-        vys += 0.5 * W1 * ays;
-        vzs += 0.5 * W1 * azs;
-
-        // Sub-step 2, coefficient W0. It is negative: the middle sub-step
-        // integrates backwards, which is what cancels the h^3 error term.
-        vxs += 0.5 * W0 * axs;
-        vys += 0.5 * W0 * ays;
-        vzs += 0.5 * W0 * azs;
-        rxs += W0 * vxs;
-        rys += W0 * vys;
-        rzs += W0 * vzs;
-        force((float)rxs, (float)rys, (float)rzs, axs, ays, azs, bodies, 1, 0);
-        vxs += 0.5 * W0 * axs;
-        vys += 0.5 * W0 * ays;
-        vzs += 0.5 * W0 * azs;
-
-        // Sub-step 3, coefficient W1 again.
-        vxs += 0.5 * W1 * axs;
-        vys += 0.5 * W1 * ays;
-        vzs += 0.5 * W1 * azs;
-        rxs += W1 * vxs;
-        rys += W1 * vys;
-        rzs += W1 * vzs;
-        force((float)rxs, (float)rys, (float)rzs, axs, ays, azs, bodies, 2, 0);
-        vxs += 0.5 * W1 * axs;
-        vys += 0.5 * W1 * ays;
-        vzs += 0.5 * W1 * azs;
+        const double w = Scheme::weight(sub);
+        vxs += 0.5 * w * axs;
+        vys += 0.5 * w * ays;
+        vzs += 0.5 * w * azs;
+        Scheme::drift(rxs, rys, rzs, vxs, vys, vzs, w, mu_sun);
+        force((float)rxs, (float)rys, (float)rzs, axs, ays, azs, bodies, sub,
+              first);
+        vxs += 0.5 * w * axs;
+        vys += 0.5 * w * ays;
+        vzs += 0.5 * w * azs;
     }
 
     rx[i] = rxs;
@@ -222,16 +234,17 @@ __global__ void particle_step(double *rx, double *ry, double *rz,
 //   bodies: where the massive bodies are at t = 0.
 // Returns:
 //   Nothing.
+template <bool kick_includes_sun>
 __global__ void initial_accel(const double *rx, const double *ry,
                               const double *rz, double *ax, double *ay,
-                              double *az, int n, BodyTable bodies, bool wh)
+                              double *az, int n, BodyTable bodies)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n)
         return;
 
     force((float)rx[i], (float)ry[i], (float)rz[i], ax[i], ay[i], az[i],
-          bodies, 0, wh ? 1 : 0);
+          bodies, 0, kick_includes_sun ? 0 : 1);
 }
 
 namespace
@@ -381,9 +394,14 @@ GpuSimulation::GpuSimulation(std::vector<Planet> planets, std::int64_t n,
     for (int sub = 0; sub < 3; ++sub)
         record_positions(at_zero, planets_, sub);
 
-    initial_accel<<<grid_for(n), BLOCK>>>(rx_, ry_, rz_, ax_, ay_, az_,
-                                          static_cast<int>(n), at_zero,
-                                          wisdom_holman_);
+    if (wisdom_holman_)
+        initial_accel<false><<<grid_for(n), BLOCK>>>(rx_, ry_, rz_, ax_, ay_,
+                                                     az_, static_cast<int>(n),
+                                                     at_zero);
+    else
+        initial_accel<true><<<grid_for(n), BLOCK>>>(rx_, ry_, rz_, ax_, ay_,
+                                                    az_, static_cast<int>(n),
+                                                    at_zero);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 }
@@ -405,10 +423,14 @@ GpuSimulation::~GpuSimulation()
 
 void GpuSimulation::launch(const BodyTable &bodies)
 {
-    particle_step<<<grid_for(n_), BLOCK>>>(rx_, ry_, rz_, vx_, vy_, vz_, ax_,
-                                           ay_, az_, static_cast<int>(n_),
-                                           bodies, wisdom_holman_,
-                                           ph::G * ph::M_Sun);
+    const int n = static_cast<int>(n_);
+    const double mu = ph::G * ph::M_Sun;
+    if (wisdom_holman_)
+        particle_step<WisdomHolman><<<grid_for(n), BLOCK>>>(
+            rx_, ry_, rz_, vx_, vy_, vz_, ax_, ay_, az_, n, bodies, mu);
+    else
+        particle_step<Yoshida4><<<grid_for(n), BLOCK>>>(
+            rx_, ry_, rz_, vx_, vy_, vz_, ax_, ay_, az_, n, bodies, mu);
 
     // A launch is asynchronous. The first check catches a launch that never
     // started; the second waits, so the next step and any copy see completed
