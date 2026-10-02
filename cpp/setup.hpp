@@ -12,24 +12,16 @@
 #include "physics.hpp"
 
 // Where the massive bodies are and where the test particles start. Both builds
-// call these, and that is the point: a CPU run and a GPU run that agree must
-// start from bit-identical particles, and the only way to keep them identical
-// is to draw them from one function.
+// call these, so a CPU run and a GPU run start from bit-identical particles.
 
-// A Kirkwood gap sits at a fixed fraction of the perturber's axis -- 2.50 AU is
-// the 3:1 of 5.20 -- so a planet placed anywhere else puts every resonance
-// outside the test-particle disk and no gap can form there at all. The axes and
-// eccentricities come from ph, which cites them.
+// The perturbers' axes and eccentricities come from ph, which cites them. A
+// Kirkwood gap sits at a fixed fraction of the perturber's axis, so moving the
+// planet moves every resonance with it.
 inline constexpr double JUPITER_A_AU = ph::A_JUPITER_AU;
 inline constexpr double SATURN_A_AU = ph::A_SATURN_AU;
 
 // A body on an orbit of the given elements, placed at perihelion on the +x axis
-// with its velocity along +y.
-//
-// Eccentricity matters here and is not a refinement. A circular perturber's
-// perihelion does not precess, so there is no g5 or g6 secular frequency, so
-// the nu5 and nu6 resonances -- which are what make the 3:1, 4:1, 5:2 and 7:3
-// commensurabilities chaotic -- are absent. See ph::E_JUPITER.
+// with its velocity along +y. For why e matters see ph::E_JUPITER.
 //
 // Arg:
 //   mass: body mass in solar masses.
@@ -50,12 +42,8 @@ inline Planet body_at_perihelion(double mass, double a_au, double e)
 }
 
 // Fills in the Sun-only acceleration of every body, from its current position.
-//
-// The bodies come out of make_planets() already consistent, because a build
-// that integrates them on the host -- the GPU one -- has no plant_acc() to call
-// and would otherwise take its first kick with a zero acceleration. That is a
-// one-off O(h^2) error, silent, and worth 0.05 AU of Jupiter after a few
-// hundred steps.
+// make_planets() leaves the bodies consistent, so a host-side integrator with no
+// separate call can take its first kick correctly.
 //
 // Args:
 //   planets: bodies to update in place.
@@ -73,21 +61,14 @@ inline void sun_only_acceleration(std::vector<Planet> &planets)
     }
 }
 
-// The massive bodies of the restricted problem.
-//
-// Their acceleration is Sun-only, so Jupiter and Saturn do not pull on each
-// other here. The test particles feel every body, but with circular orbits that
-// is not enough for the secular resonances the gaps are attributed to: nu5 and
-// nu6 exist because the planetary perihelia precess, and a circular orbit's
-// perihelion does not. Pass eccentric = true for the model the literature
-// actually uses.
+// The massive bodies of the restricted problem. Their acceleration is Sun-only,
+// so Jupiter and Saturn do not pull on each other; the test particles feel every
+// body.
 //
 // Args:
 //   with_saturn: add Saturn.
-//   eccentric: use the real eccentricities from ph. False reproduces the
-//     circular runs this project started with, which are worth keeping as a
-//     control -- they are the model that does NOT produce the higher-order
-//     gaps.
+//   eccentric: use the real eccentricities from ph. False gives circular
+//     perturbers, which is the control.
 // Returns:
 //   Jupiter, and Saturn if asked for, with their accelerations already set.
 inline std::vector<Planet> make_planets(bool with_saturn, bool eccentric)
@@ -103,12 +84,8 @@ inline std::vector<Planet> make_planets(bool with_saturn, bool eccentric)
 }
 
 // Puts a stored epoch's body positions and velocities back into this run's
-// bodies, keeping the masses this build knows.
-//
-// The epoch format does not store masses -- they belong to the setup, not to the
-// state -- so a resumed run takes them from make_planets() and only the state
-// from the file. The acceleration is recomputed, because the format does not
-// store that either; it is a function of the positions.
+// bodies, keeping the masses this build knows: the epoch stores state, not
+// setup. The acceleration is refilled from the positions.
 //
 // Args:
 //   planets: this run's bodies, with masses; positions and velocities are
@@ -163,8 +140,8 @@ void fill_particles(std::int64_t n, double e_max, std::uint64_t seed,
         double r = radius(rng);
         const double e = eccentricity(rng);
 
-        // Placed at perihelion, so r is scaled down by (1 - e) while the speed
-        // carries the (1 + e) / (1 - e) of the vis-viva speed there.
+        // At perihelion: r is scaled by (1 - e) and the vis-viva speed there
+        // carries (1 + e) / (1 - e).
         const double v = std::sqrt(ph::G * ph::M_Sun / r * (1 + e) / (1 - e));
         r *= (1 - e);
         rx[i] = r * std::cos(th);
