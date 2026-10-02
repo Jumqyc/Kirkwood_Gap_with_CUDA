@@ -31,6 +31,7 @@ import argparse
 import shutil
 import subprocess
 import sys
+import time
 
 import numpy as np
 from dataclasses import dataclass
@@ -75,22 +76,74 @@ SEGMENTS = [
 ]
 
 
+class Stalled(RuntimeError):
+    """A batch produced more steps without writing a dump for too long."""
+
+
+def newest_dump_mtime(dumps: Path) -> float:
+    """Modification time of the most recently written epoch file, or 0."""
+    files = list(dumps.glob("epoch_*.bin"))
+    return max((f.stat().st_mtime for f in files), default=0.0)
+
+
 def run_binary(binary: Path, n_particle: int, n_step: int, dumps: Path,
-               epoch_every: int, seed: int) -> None:
-    """Runs one batch. `n_step` is the total step count in this binary's dt."""
+               epoch_every: int, seed: int, stall_seconds: float) -> None:
+    """Runs one batch, killing it if it stops making progress.
+
+    Args:
+        binary: the integrator to launch.
+        n_particle, n_step, epoch_every, seed: passed through to the binary.
+        dumps: directory the binary writes epochs into; watched for progress.
+        stall_seconds: give up if no new epoch appears for this long. Every
+            segment writes one at least every ~95 s -- the dt = 20 binary at
+            4e6 particles is the slowest -- so a gap this long is a hang, not
+            a slow step.
+
+    A hang is not something the binary can report. cuda/gpu_simulation.cu
+    checks every CUDA call, but a call that never returns has no error code to
+    check, and the process sits in cudaDeviceSynchronize burning a core with
+    the GPU idle. That is exactly what happened once and cost eight hours.
+
+    Raises:
+        Stalled: if the batch made no progress for `stall_seconds`.
+    """
     cmd = [str(binary), str(n_particle), str(n_step), str(dumps),
            str(epoch_every), "0.1", "1", str(seed), "1"]
     print("    $ " + " ".join(cmd[1:]), flush=True)
+
+    # The poll interval is the floor on what this can detect: a stall shorter
+    # than POLL cannot be seen, because any poll that finds a new epoch resets
+    # the deadline. The default threshold is 300 s against a 5 s poll, so the
+    # margin is wide; a threshold below POLL would never fire at all.
+    POLL = 5.0
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True)
+    last = newest_dump_mtime(dumps)
+    deadline = time.monotonic() + stall_seconds
+    while proc.poll() is None:
+        time.sleep(POLL)
+        now = newest_dump_mtime(dumps)
+        if now > last:
+            last = now
+            deadline = time.monotonic() + stall_seconds
+        elif time.monotonic() > deadline:
+            proc.kill()
+            proc.wait(timeout=30)
+            raise Stalled(f"no new epoch for {stall_seconds:.0f} s at step {n_step}")
+
+    out = proc.stdout.read() if proc.stdout else ""
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, cmd, out)
     # The binary prints which epoch it resumed from. That line is the only
     # evidence the segments are actually chained, so it has to reach the log.
-    done = subprocess.run(cmd, check=True, capture_output=True, text=True)
-    for line in done.stdout.splitlines():
+    for line in out.splitlines():
         if "resuming" in line:
             print("      " + line.strip(), flush=True)
 
 
 def build_segment(seg: Segment, build: Path, work: Path, frames: int,
                   chunk: int, n_particle: int, seed: int, vmax: float,
+                  stall_seconds: float, attempts: int,
                   keep_dumps: bool) -> list[Path]:
     """Runs one segment in rounds and returns its rendered frames, in order."""
     # One dump directory for every segment, because that is the channel the
@@ -121,7 +174,17 @@ def build_segment(seg: Segment, build: Path, work: Path, frames: int,
     while done < frames:
         done = min(frames, done + chunk)
         n_step = seg.steps_at_start + done * epoch_every
-        run_binary(build / seg.binary, n_particle, n_step, dumps, epoch_every, seed)
+        # A stall costs only the current batch: the state is on disk, so the
+        # retry resumes from the newest epoch and the steps taken are not redone.
+        for attempt in range(1, attempts + 1):
+            try:
+                run_binary(build / seg.binary, n_particle, n_step, dumps,
+                           epoch_every, seed, stall_seconds)
+                break
+            except (Stalled, subprocess.CalledProcessError) as exc:
+                print(f"    !! attempt {attempt}/{attempts} failed: {exc}", flush=True)
+                if attempt == attempts:
+                    raise
 
         if baseline is None:
             baseline = load_baseline(work / "baseline.npy", dumps)
@@ -186,6 +249,12 @@ def main() -> int:
                              "n_particle or the dense core saturates")
     parser.add_argument("--seed", type=int, default=114514)
     parser.add_argument("--only", default=None, help="build one segment, by name")
+    parser.add_argument("--stall-seconds", type=float, default=300.0,
+                        help="kill and retry a batch that writes no epoch for "
+                             "this long; every segment writes one at least "
+                             "every ~95 s, so the default is a hang detector")
+    parser.add_argument("--attempts", type=int, default=3,
+                        help="tries per batch before giving up")
     parser.add_argument("--keep-dumps", action="store_true")
     parser.add_argument("--no-encode", action="store_true")
     args = parser.parse_args()
@@ -202,7 +271,8 @@ def main() -> int:
             continue
         frames = build_segment(seg, args.build, args.work, args.frames,
                                args.chunk, args.n_particle, args.seed,
-                               vmax=args.vmax, keep_dumps=args.keep_dumps)
+                               vmax=args.vmax, stall_seconds=args.stall_seconds,
+                               attempts=args.attempts, keep_dumps=args.keep_dumps)
         all_frames.extend(frames)
 
     if args.only is None and not args.no_encode:
