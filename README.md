@@ -82,6 +82,7 @@ cpp/                    shared by both builds
   setup.hpp             the perturbers and the initial draw
   args.hpp              the command line, and the one-line summary
   epoch_file.hpp        the epoch file: the only definition of the format
+  kepler.hpp            exact two-body drift, for the Wisdom-Holman scheme
   simulation.hpp/.cpp   the CPU integrator, which is the reference
   main.cpp
 cuda/
@@ -97,6 +98,8 @@ scripts/
   render_frames.py      one epoch to one frame, PNG plus its histograms
   render_from_npz.py    the same frames redrawn from those histograms, any dpi
   render_4k.sh          drives the above over a whole video
+tests/
+  test_kepler.cpp       the drift, against answers known in closed form
 analysis.ipynb          the analysis, top to bottom
 ```
 
