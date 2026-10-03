@@ -1,15 +1,13 @@
 #!/bin/bash
-# Rebuilds data/sweep after it was deleted.
+# Builds the seven configurations analysis.ipynb reads.
 #
-# Seven configurations, all at 1e5 particles with seed 114514, six of them the
-# ones scripts/sweep.sh queues and two launched separately. Every one is dumped
-# on the 64-epoch stride and ALL of them are kept: the analysis iterates a run's
-# whole directory to build its "ever crossed Mars" mask, so an epoch that no
-# call site names is still read.
+# All at 1e5 particles with seed 114514, so a rebuild is bit-identical to any
+# other. Each is dumped on the 64-epoch stride and every epoch is kept: the
+# notebook iterates a run's whole directory to build its "ever crossed Mars"
+# mask, so an epoch that no call site names is still read.
 #
-# Checked afterwards by running analysis.ipynb and diffing its output against
-# /tmp/nb_before.out, which was taken while the previous copy of this data was
-# intact.
+# Check the result by running analysis.ipynb and diffing its output against a
+# copy taken from known-good data.
 set -u
 cd /home/jumqyc/Works/作业/SelfStudy/Kirkwood
 B=build-o3/kirkwood_gpu
