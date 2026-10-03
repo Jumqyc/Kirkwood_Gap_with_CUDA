@@ -4,6 +4,10 @@ A test-particle simulation of the asteroid belt's resonant structure, written as
 a symplectic integrator and used as the vehicle for an HPC exercise: the same
 physics on the CPU and on the GPU, measured and compared.
 
+**[Watch it: 81 seconds, 4K](https://www.bilibili.com/video/BV16RHi6oE46/)** — a
+million years of the belt, cut into four segments at four step sizes, from the
+first thousand years to the last nine hundred thousand.
+
 The answer it arrives at is that **the 3:1 and 5:2 gaps need two ingredients at
 once, and neither works alone**: perturbers with eccentric orbits, which is what
 makes the ν₅ and ν₆ secular resonances exist, and a removal mechanism, without
@@ -55,11 +59,15 @@ roughly 3–7 × 10⁴ years and then stop moving.
   on [2.0, 3.5] AU, eccentricity uniform on [0, e_max], every one placed at
   perihelion.
 - Units are AU, day and M☉. `G` is folded per step, so velocities are AU per
-  *step*, not per day, and `dt` is 10 days unless `scripts/` is told otherwise.
-- The integrator is a kick–drift–kick leapfrog composed into Yoshida's
-  fourth-order scheme, S₂(w₁)S₂(w₀)S₂(w₁) with w₁ = 1.3512…, w₀ = −1.7024….
-  Self-convergence measures order p = 4.00, against p = 1.98 for plain leapfrog
-  as a control. See `docs/` history in `git log` for the derivation.
+  *step*, not per day. `dt` is a build option (`PH_DT`, default 10 days).
+- Two integrators, picked at run time with the tenth argument or `--wh`. The
+  default is a kick–drift–kick leapfrog composed into Yoshida's fourth-order
+  scheme, S₂(w₁)S₂(w₀)S₂(w₁) with w₁ = 1.3512…, w₀ = −1.7024…; self-convergence
+  measures order p = 4.00, against p = 1.98 for plain leapfrog as a control.
+  The other is the Wisdom–Holman mapping: the drift becomes an exact Kepler
+  advance, DKD, and the kick carries only the perturbers. Its step is limited by
+  how fast the perturbation changes rather than by perihelion, which is worth
+  about ten times the step for the same accuracy.
 - Removal is **not** part of the integration. The test particles do not interact,
   so deleting one leaves every other trajectory untouched, which makes removal
   equivalent to screening the stored snapshots afterwards. Removing one from a
@@ -82,10 +90,14 @@ cuda/
   main.cu
 python/                 reading and plotting only; never physics
   kirkwood_io.py
-scripts/                driver scripts for unattended runs
+scripts/
   run_one.sh            one run, with resume, watchdog and slicing
   sweep.sh              a budgeted queue of runs
-  ae_evolution.py       the animations above
+  ae_evolution.py       the two GIFs in docs/
+  make_video.py         the video: four segments, four step sizes, one MP4
+  render_frames.py      one epoch to one frame, PNG plus its histograms
+  render_from_npz.py    the same frames redrawn from those histograms, any dpi
+  render_4k.sh          drives the above over a whole video
 analysis.ipynb          the analysis, top to bottom
 ```
 
@@ -115,9 +127,15 @@ command line against either:
 
 ```sh
 ./build-o3/kirkwood     <n_particles> <n_steps> [dump_dir] [epoch_every] \
-                        [e_max] [saturn] [seed] [eccentric]
+                        [e_max] [saturn] [seed] [eccentric] [wisdom_holman]
 ./build-o3/kirkwood_gpu <same>
 ```
+
+`cmake --build` produces one GPU binary per step size — `kirkwood_gpu` (10 days),
+`_dt0p5`, `_dt2`, `_dt5`, `_dt20`, `_dt100`, `_dt200` — because the epoch format
+stores velocities in AU per step, and a state written with one `dt` cannot be
+read by a binary built with another without rescaling. A video segment uses the
+step size that suits its span; the driver picks the ladder from the integrator.
 
 Prefix a benchmark with `""` as `dump_dir`: the dumps share the wall clock with
 the integration, so otherwise a timing run measures the disk.
@@ -143,7 +161,8 @@ Measured on the machine this was developed on, 10⁶ particles:
 | | ns per particle per step |
 |---|---|
 | CPU, 4 OpenMP threads | 18.6 |
-| GPU | 0.83 |
+| GPU, Yoshida-4 | 0.83 |
+| GPU, Wisdom–Holman | 4.09 |
 
 The GPU port is one thread per particle for a whole outer step, with the
 accumulator in a register and no barrier anywhere, and it passes the perturbers'
@@ -155,6 +174,14 @@ worth 1.80×. Per-particle |Δa| after 10⁵ years rises from 1 × 10⁻¹⁴ to
 actually measured is a density, and the difference is 30× smaller than the signal
 in the worst bin.
 
+Wisdom–Holman costs 4.5× more per step, because the Kepler solve is 14 force
+evaluations' worth of arithmetic, but takes 10.8× larger steps: 2.4× faster
+overall. The profile is unambiguous about where its cost is — ncu puts 97 % of
+its cycles with no eligible warp, and every cycle it spends over the Yoshida
+kernel is waiting on a MUFU result. The solve's `sin` and `cos` are serially
+dependent through the Newton iteration and 8 warps per scheduler cannot hide
+them.
+
 The machines' own rates matter to two scripts — `scripts/run_one.sh` sets its
 watchdog threshold from a measured pace, and `scripts/sweep.sh` decides what fits
 in a budget from a rate table — and both say so where they are set.
@@ -164,14 +191,14 @@ in a budget from a rate table — and both say so where they are set.
 - **Removal is not implemented on the GPU.** It does not need to be, per the
   argument above, but the argument rests on the particles being non-interacting
   and would fail the moment the disk is given self-gravity.
-- **`dt` is a compile-time constant** in `cpp/physics.hpp`. Lowering it to 2 days
-  for a convergence check costs five times the steps for the same physical time;
-  the resulting run covers 0.02 Myr against the 10-day run's 0.30, which is short
-  of the 3–7 × 10⁴ years over which the structures plateau. Whether the
-  eccentricity ceiling at e ≈ 0.65 is physical or numerical is therefore **not
-  settled**. It is suspicious: the 3:1 and the 5:2 differ in semimajor axis by
-  13 % but both stop at a perihelion near 0.9 AU, and a physical ceiling should
-  move with `a`.
+- **Whether `dt = 10` days is fine enough is not settled.** At `e ≈ 0.65` a
+  perihelion passage lasts only a few steps, and the 3:1 and the 5:2 — whose
+  semimajor axes differ by 13 % — both stop at a perihelion near 0.9 AU, which
+  is what a numerical ceiling rather than a physical one looks like. The
+  convergence check run so far reaches only 0.02 Myr, short of the
+  3–7 × 10⁴ years over which the structures plateau. Wisdom–Holman is the
+  natural way to settle it: its drift is exact, so its step is set by the
+  perturbation, and it is now available and tested.
 - **The perturbers' mutual gravity is ignored.** Jupiter and Saturn do not pull
   on each other here, so their orbits are fixed Kepler ellipses and `g₅` and `g₆`
   do not drift. Real secular resonance structure depends on those frequencies.
