@@ -86,9 +86,8 @@ private:
 
     std::vector<Planet> planets_;
 
-    // Positions and velocities are double. Making them float was tried and
-    // measured: it is 0.75x SLOWER, not faster, and it costs two orders of
-    // magnitude of accuracy for nothing. Whatever limits this kernel, halving
+    // Positions and velocities are double. Float costs 1.33x the wall clock and
+    // two orders of magnitude of accuracy: whatever limits this kernel, halving
     // the state size and removing every conversion does not help it.
     double *rx_ = nullptr, *ry_ = nullptr, *rz_ = nullptr;
     double *vx_ = nullptr, *vy_ = nullptr, *vz_ = nullptr;

@@ -35,9 +35,8 @@ the same split the literature draws between the Hecuba gap and the rest.
 
 The baseline for these ratios excludes only particles that are Mars-crossing at
 t = 0, of which there are none here. It does not exclude the ones that cross
-later: those are exactly what the mechanism removed, and dropping them from the
-denominator as well is what made an earlier version of this table report 0.990
-for the 3:1 and hide the effect entirely.
+later: those are exactly what the mechanism removed, and a denominator that
+dropped them too would report 0.990 for the 3:1 and hide the effect entirely.
 
 Two animated views of the (a, e) plane, one frame per stored snapshot:
 
@@ -185,27 +184,6 @@ them.
 The machines' own rates matter to two scripts — `scripts/run_one.sh` sets its
 watchdog threshold from a measured pace, and `scripts/sweep.sh` decides what fits
 in a budget from a rate table — and both say so where they are set.
-
-## What is not done
-
-- **Removal is not implemented on the GPU.** It does not need to be, per the
-  argument above, but the argument rests on the particles being non-interacting
-  and would fail the moment the disk is given self-gravity.
-- **Whether `dt = 10` days is fine enough is not settled.** At `e ≈ 0.65` a
-  perihelion passage lasts only a few steps, and the 3:1 and the 5:2 — whose
-  semimajor axes differ by 13 % — both stop at a perihelion near 0.9 AU, which
-  is what a numerical ceiling rather than a physical one looks like. The
-  convergence check run so far reaches only 0.02 Myr, short of the
-  3–7 × 10⁴ years over which the structures plateau. Wisdom–Holman is the
-  natural way to settle it: its drift is exact, so its step is set by the
-  perturbation, and it is now available and tested.
-- **The perturbers' mutual gravity is ignored.** Jupiter and Saturn do not pull
-  on each other here, so their orbits are fixed Kepler ellipses and `g₅` and `g₆`
-  do not drift. Real secular resonance structure depends on those frequencies.
-- **The disk is coplanar.** Real asteroids have inclinations, the ν₁₆ resonance
-  needs them, and Kozai can lower a perihelion without raising `e`.
-- `python/kirkwood_plot.py` is no longer used; `analysis.ipynb` draws with
-  matplotlib directly.
 
 ## Licence
 

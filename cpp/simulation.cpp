@@ -81,7 +81,7 @@ namespace
 
     // Expands to one call per body: straight-line code, no loop. A body loop here
     // would become the innermost loop, and the vectorizer only vectorizes the
-    // innermost one -- that is what killed the earlier attempt.
+    // innermost one.
     template <std::size_t... B>
     inline void all_bodies(std::index_sequence<B...>,
                            double &accel_x,

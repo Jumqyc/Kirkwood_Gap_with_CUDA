@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # 1e6 test particles for 1e6 years: the run that asks whether the 3:1 resonance is
-# simply slower than the 2:1, which the earlier 20000-particle sweep could not
+# simply slower than the 2:1, which 20 000 particles cannot
 # answer. With a watchdog and automatic restart.
 #
 #   bash scripts/run_one.sh
