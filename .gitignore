@@ -9,3 +9,7 @@ data/
 __pycache__/
 # Scratch previews; the finished video lives in docs/.
 preview*.mp4
+
+# 4K frame dumps and videos; large, and regenerable from the npz files.
+data/video/frames4k/
+data/video/*.list
